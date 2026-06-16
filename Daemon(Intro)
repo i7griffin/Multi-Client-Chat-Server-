@@ -1,0 +1,451 @@
+PHASE 1 — Networking Fundamentals: Complete Notes
+Lesson 1.1 — What is a Daemon?
+The word "daemon" comes from Greek mythology — a spirit that operated in the background, doing work without being seen. In Unix/Linux, this meaning carried over perfectly.
+A daemon is a program that:
+
+Runs in the background
+Has no controlling terminal (no keyboard, no screen attached)
+Starts at boot time (usually)
+Waits silently for something to happen (a connection, a file change, a timer)
+Responds automatically when triggered
+
+Real Examples of Daemons:
+DaemonWhat It DoessshdWaits for SSH connections on port 22httpd / nginxWaits for web requests on port 80/443cronWaits for a scheduled time, then runs jobssystemdManages all other daemonsbluetoothdManages Bluetooth connectionssyslogdCollects and stores system log messages
+NORMAL PROGRAM (like ls, python script):
+─────────────────────────────────────────
+  You run it → It does its job → It exits
+  [terminal] → [program] → [done]
+
+
+DAEMON:
+─────────────────────────────────────────
+  System boots
+       │
+       ▼
+  [daemon starts] ──► detaches from terminal
+       │
+       ▼
+  [runs silently in background]
+       │
+       ▼
+  ┌────────────────────────────┐
+  │   EVENT LOOP (infinite)    │
+  │                            │
+  │  waiting...waiting...      │
+  │  ← CONNECTION ARRIVES →   │
+  │  handle it                 │
+  │  waiting...waiting...      │
+  │  ← ANOTHER CONNECTION →   │
+  │  handle it                 │
+  │  ...forever...             │
+  └────────────────────────────┘
+       │
+       ▼
+  Only stops when:
+  - admin kills it (kill, systemctl stop)
+  - system shuts down
+
+Lesson 1.2 — Process vs Daemon vs Service vs Server
+Process:
+
+A process is a running program with its own memory space, PID (Process ID), and CPU time.
+┌──────────────────────────────────────────┐
+│              PROCESS                     │
+│                                          │
+│  PID: 4821                               │
+│  Memory: [code][stack][heap][data]       │
+│  State: running / sleeping / zombie      │
+│  Owner: your username                    │
+│  Parent: the process that launched it    │
+└──────────────────────────────────────────┘
+Daemon vs Process:
+PROCESS                        DAEMON
+────────────────               ────────────────────────
+Has a terminal    ──vs──       No terminal (detached)
+Runs once                      Runs forever (event loop)
+User launches it               System/init launches it
+Dies when done                 Dies only when killed
+Service:
+
+A service is a daemon managed by the init system (like systemd).
+DAEMON (raw concept):
+  "A background process"
+
+SERVICE (managed daemon):
+  "A daemon that systemd knows about,
+   can start/stop/restart/monitor automatically"
+
+  systemctl start nginx    ← managing a service
+  systemctl status sshd    ← checking a service
+All services are daemons. Not all daemons are formally registered as services.
+Server (in networking context):
+  CLIENT                          SERVER
+  ──────                          ──────
+  Makes requests      ──────►     Listens for requests
+  Initiates contact               Waits passively
+  Connects TO server              Accepts connections
+  Example: your browser           Example: nginx, our daemon
+Full Picture:
+┌─────────────────────────────────────────────────────┐
+│                   YOUR MACHINE                      │
+│                                                     │
+│  ┌──────────────────────────────────────────────┐  │
+│  │              systemd (init system)            │  │
+│  │  manages ──► registers ──► monitors           │  │
+│  └──────────────┬───────────────────────────────┘  │
+│                 │                                   │
+│         ┌───────┴────────┐                         │
+│         │                │                         │
+│    ┌────▼─────┐    ┌─────▼────┐                   │
+│    │  sshd    │    │  nginx   │  ← daemons/        │
+│    │ (daemon) │    │ (daemon) │    services/        │
+│    │ (service)│    │ (service)│    servers          │
+│    │ (server) │    │ (server) │                    │
+│    └──────────┘    └──────────┘                    │
+│                                                     │
+│  Both are: processes + daemons + services + servers │
+└─────────────────────────────────────────────────────┘
+
+Lesson 1.3 — TCP vs UDP
+TCP = Certified mail. UDP = Dropping a postcard in a mailbox.
+TCP — Transmission Control Protocol:
+
+Guaranteed delivery (lost packets are resent)
+Ordered (packets arrive in sequence)
+Integrity checked (checksums)
+Flow controlled (sender doesn't overwhelm receiver)
+Cost: overhead
+
+TCP DATA FLOW:
+──────────────────────────────────────────────
+Sender                              Receiver
+  │                                    │
+  │─── packet 1 ──────────────────────►│ ✓
+  │─── packet 2 ──────────────────────►│ ✓
+  │─── packet 3 ──────────(LOST)───────│ ✗
+  │◄── "please resend 3" ──────────────│
+  │─── packet 3 ──────────────────────►│ ✓
+  │─── packet 4 ──────────────────────►│ ✓
+                                        │
+                             Delivers to app
+                             in order: 1,2,3,4
+Used for: Web browsing (HTTP/HTTPS), SSH, email, file transfer, our daemon.
+UDP — User Datagram Protocol:
+
+Connectionless (no setup)
+Unreliable (packets may be lost, duplicated, or out of order)
+Fast (no overhead, no waiting for acknowledgments)
+
+UDP DATA FLOW:
+──────────────────────────────────────────────
+Sender                              Receiver
+  │                                    │
+  │─── packet 1 ──────────────────────►│ ✓
+  │─── packet 2 ──────────(LOST)───────│
+  │─── packet 3 ──────────────────────►│ ✓
+  │─── packet 4 ──────────────────────►│ ✓
+                                        │
+                             Delivers to app:
+                             1, 3, 4 (2 gone forever)
+                             No complaints, no retry
+Used for: Video streaming, DNS, online games, VoIP.
+Comparison Table:
+┌─────────────────┬──────────────────┬──────────────────┐
+│   Property      │      TCP         │      UDP         │
+├─────────────────┼──────────────────┼──────────────────┤
+│ Connection      │ Required first   │ None needed      │
+│ Reliability     │ Guaranteed       │ Not guaranteed   │
+│ Order           │ Maintained       │ Not maintained   │
+│ Speed           │ Slower (overhead)│ Faster           │
+│ Use case        │ Accuracy matters │ Speed matters    │
+│ Header size     │ 20-60 bytes      │ 8 bytes          │
+│ Examples        │ HTTP, SSH, SMTP  │ DNS, VoIP, games │
+└─────────────────┴──────────────────┴──────────────────┘
+Our daemon uses TCP — because we're building a chat/command server where losing messages is unacceptable.
+
+Lesson 1.4 — IP Addresses
+An IP address is the unique identifier for a device on a network — like a postal address for your computer.
+IPv4 — 32 bits, written as 4 numbers (0–255) separated by dots:
+192  .  168  .   1   .  100
+───     ───     ───     ───
+ 8 bits  8 bits  8 bits  8 bits
+              = 32 bits total
+         = ~4.3 billion addresses
+Special IP Addresses:
+┌──────────────────┬──────────────────────────────────────┐
+│ Address          │ Meaning                              │
+├──────────────────┼──────────────────────────────────────┤
+│ 127.0.0.1        │ Loopback — "this machine itself"     │
+│ localhost        │ Same as 127.0.0.1 (hostname alias)  │
+│ 0.0.0.0          │ "All interfaces on this machine"     │
+│ 192.168.x.x      │ Private home/office network          │
+│ 10.x.x.x         │ Private corporate network            │
+│ 8.8.8.8          │ Google's public DNS server           │
+└──────────────────┴──────────────────────────────────────┘
+Why 0.0.0.0 matters for our daemon:
+YOUR SERVER MACHINE
+───────────────────
+  Interface: eth0 → 192.168.1.50  (local network)
+  Interface: eth1 → 10.0.0.5      (another network)
+  Interface: lo   → 127.0.0.1     (loopback)
+
+Bind to 127.0.0.1    → only local programs can connect
+Bind to 192.168.1.50 → only that one network
+Bind to 0.0.0.0      → ALL of the above simultaneously
+
+Lesson 1.5 — Ports
+An IP address gets you to a machine. A port gets you to a specific program on that machine.
+
+IP address = apartment building address
+Port = apartment number inside the building
+
+INCOMING PACKET ARRIVES AT YOUR MACHINE
+────────────────────────────────────────
+Destination: 192.168.1.50 : 80
+                   │          │
+                   │          └──► Port 80  → nginx (web server)
+                   └─────────────► Your machine
+
+Another packet:
+Destination: 192.168.1.50 : 22
+                              └──► Port 22  → sshd (SSH daemon)
+
+Another:
+Destination: 192.168.1.50 : 9000
+                              └──► Port 9000 → OUR DAEMON
+Port Ranges:
+┌─────────────────┬────────────────────────────────────────┐
+│ Range           │ Category                               │
+├─────────────────┼────────────────────────────────────────┤
+│ 0 – 1023        │ Well-known ports (need root to bind)  │
+│                 │ HTTP=80, HTTPS=443, SSH=22, FTP=21     │
+├─────────────────┼────────────────────────────────────────┤
+│ 1024 – 49151    │ Registered ports (normal user can use)│
+│                 │ Common for custom apps                 │
+├─────────────────┼────────────────────────────────────────┤
+│ 49152 – 65535   │ Ephemeral/dynamic ports               │
+│                 │ OS assigns these to clients            │
+└─────────────────┴────────────────────────────────────────┘
+Our daemon will use port 9000.
+
+Lesson 1.6 — Client-Server Architecture
+CLIENT-SERVER MODEL
+───────────────────────────────────────────────────────
+
+  CLIENT                                    SERVER
+  ──────                                    ──────
+  (your terminal,                           (our daemon)
+   chat app, etc.)
+
+  1. Knows server's IP + port
+  2. Initiates connection ──────────────►   3. Was already waiting
+                                            4. Accepts connection
+  5. Sends data (request) ─────────────►   6. Receives, processes
+                          ◄─────────────   7. Sends response
+  8. Receives response
+  9. May send more...
+  ... (conversation continues)
+  10. Closes connection  ──────────────►   11. Cleans up, waits again
+
+KEY INSIGHT:
+  Server must be running BEFORE client tries to connect.
+  Server is PASSIVE (waits).
+  Client is ACTIVE (initiates).
+
+Lesson 1.7 — The Socket Concept
+A socket is the software abstraction that represents one endpoint of a network connection.
+
+A phone call needs two phones.
+A network connection needs two sockets — one on each end.
+
+SOCKET — THE ENDPOINT ABSTRACTION
+──────────────────────────────────────────────────────
+
+  YOUR PROGRAM                         REMOTE PROGRAM
+  ───────────                          ──────────────
+  ┌─────────┐                          ┌─────────┐
+  │         │                          │         │
+  │  Your   │                          │ Remote  │
+  │  Code   │                          │  Code   │
+  │         │                          │         │
+  └────┬────┘                          └────┬────┘
+       │                                    │
+  ┌────▼────┐    ════ NETWORK ════     ┌────▼────┐
+  │ SOCKET  │◄──────────────────────►  │ SOCKET  │
+  │ (file   │                          │ (file   │
+  │ descri- │                          │ descri- │
+  │  ptor)  │                          │  ptor)  │
+  └─────────┘                          └─────────┘
+
+A socket is identified by:
+  (IP address, Port, Protocol)
+  e.g. (192.168.1.50, 9000, TCP)
+
+In Linux, a socket is just a FILE DESCRIPTOR.
+Linux File Descriptor Table (per process):
+  fd 0 → stdin  (keyboard)
+  fd 1 → stdout (screen)
+  fd 2 → stderr (screen, for errors)
+  fd 3 → [a file you opened]
+  fd 4 → [a SOCKET you created]   ← our socket lives here
+  fd 5 → [another socket]
+
+Lesson 1.8 — TCP Three-Way Handshake
+Before any data flows over TCP, the two sides must establish a connection through the three-way handshake.
+TCP THREE-WAY HANDSHAKE
+────────────────────────────────────────────────────────
+
+  CLIENT                                      SERVER
+  ──────                                      ──────
+  (wants to connect)                     (listening on port 9000)
+
+  Step 1 — SYN:
+  "I want to connect.                ──SYN──►
+   My sequence number is X."
+
+  Step 2 — SYN-ACK:
+  "OK, I got your SYN.           ◄──SYN-ACK──
+   My sequence number is Y.
+   Acknowledging your X."
+
+  Step 3 — ACK:
+  "Got it. Acknowledging Y.          ──ACK──►
+   Connection established!"
+
+  ════ CONNECTION IS NOW OPEN — DATA CAN FLOW ════
+TCP Flags:
+┌──────┬────────────────────────────────────────────┐
+│ Flag │ Meaning                                    │
+├──────┼────────────────────────────────────────────┤
+│ SYN  │ Synchronize — "I want to start a connection"│
+│ ACK  │ Acknowledge — "I received what you sent"   │
+│ FIN  │ Finish — "I want to close the connection"  │
+│ RST  │ Reset — "Something went wrong, abort"      │
+│ PSH  │ Push — "Deliver this to app immediately"   │
+│ URG  │ Urgent — "Priority data"                   │
+└──────┴────────────────────────────────────────────┘
+
+Lesson 1.9 — How Linux Handles Sockets Internally
+The Tea Stall Analogy
+YOU  = your daemon (the tea stall owner)
+CUSTOMERS = clients who want to connect
+STEP 1: You SET UP your stall          → create socket
+STEP 2: You PUT A SIGN "Open at 9000"  → bind to port 9000
+STEP 3: You OPEN A WAITING LINE        → listen()
+STEP 4: Customers JOIN THE LINE        → clients send SYN
+STEP 5: You call "NEXT!" and serve     → accept()
+The Two Queues Inside the Kernel
+YOUR TEA STALL (the daemon)
+═══════════════════════════════════════════════════════════════
+
+                        PORT 9000
+                           │
+                           │  ← clients arrive here
+                           ▼
+        ┌──────────────────────────────────────┐
+        │         QUEUE 1: SYN QUEUE           │
+        │         (The "Checking" Line)         │
+        │                                      │
+        │  Client says: "Hello!" (SYN)         │
+        │  Kernel replies: "Wait!" (SYN-ACK)   │
+        │  Kernel waits for client's ACK       │
+        │                                      │
+        │  ┌──────┐ ┌──────┐ ┌──────┐         │
+        │  │Cust A│ │Cust B│ │Cust C│         │
+        │  │SYN   │ │SYN   │ │SYN   │         │
+        │  │sent  │ │sent  │ │sent  │         │
+        │  └──────┘ └──────┘ └──────┘         │
+        └──────────────┬───────────────────────┘
+                       │  handshake completes ✓
+                       ▼
+        ┌──────────────────────────────────────┐
+        │         QUEUE 2: ACCEPT QUEUE        │
+        │         (The "Ready to Serve" Line)   │
+        │                                      │
+        │  Fully handshaked, waiting for you   │
+        │                                      │
+        │  ┌──────┐ ┌──────┐                  │
+        │  │Cust A│ │Cust B│                  │
+        │  │READY │ │READY │                  │
+        │  └──────┘ └──────┘                  │
+        └──────────────┬───────────────────────┘
+                       │  YOU call accept()
+                       ▼
+              ┌─────────────────┐
+              │   YOUR DAEMON   │
+              │  "Next please!" │
+              │  Takes Cust A   │
+              └─────────────────┘
+Timeline of One Client Connecting
+CLIENT MACHINE                        LINUX KERNEL (server side)
+──────────────                        ──────────────────────────
+
+1. Client sends SYN
+                    ──── SYN ────►
+                                      Kernel receives SYN.
+                                      Puts client in SYN QUEUE.
+                                      ┌─────────────┐
+                                      │  SYN QUEUE  │
+                                      │ [client X]  │ ← added
+                                      └─────────────┘
+
+2. Kernel auto-replies
+                    ◄── SYN-ACK ──
+                                      Still waiting for ACK.
+
+3. Client sends ACK
+                    ──── ACK ────►
+                                      Handshake COMPLETE.
+                                      REMOVES from SYN QUEUE.
+                                      ADDS to ACCEPT QUEUE.
+                                      ┌───────────────┐
+                                      │ ACCEPT QUEUE  │
+                                      │  [client X]   │ ← ready
+                                      └───────────────┘
+
+4. YOUR DAEMON calls accept()
+                                      Kernel picks [client X].
+                                      Hands you a NEW socket fd.
+
+5. You talk to client X via new fd.
+Two Sockets After accept()
+BEFORE accept():
+════════════════
+  fd=4  ← LISTENING SOCKET
+         "The front door. Never talks to
+          clients directly. Only accepts entry."
+
+
+AFTER accept():
+════════════════
+  fd=4  ← LISTENING SOCKET  (stays open, waits for MORE clients)
+  fd=5  ← CLIENT SOCKET     (brand new, only for THIS one client)
+
+
+WITH 3 CLIENTS:
+════════════════
+  fd=4  LISTENING SOCKET (stays open always)
+         │
+         ├── client 1 connects → accept() → fd=5
+         ├── client 2 connects → accept() → fd=6
+         └── client 3 connects → accept() → fd=7
+
+  Talk to client 1 → through fd=5
+  Talk to client 2 → through fd=6
+  Talk to client 3 → through fd=7
+  New clients still → through fd=4
+The Backlog Number
+listen(sock, backlog=3)
+
+ACCEPT QUEUE can hold max 3 fully connected clients:
+
+  ┌────────┬────────┬────────┐
+  │client A│client B│client C│  ← FULL (3/3)
+  └────────┴────────┴────────┘
+
+  4th client tries to connect →
+  Queue is FULL →
+  Kernel sends RST →
+  Client gets "Connection refused"
+
+  If accept() is called quickly, slots free up for new clients.
