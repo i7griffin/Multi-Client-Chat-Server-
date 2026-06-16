@@ -1,1 +1,1071 @@
+PHASE 2 — Python Socket Module
+What is the Python socket Module?
+YOUR PYTHON CODE
+      │
+      │  import socket
+      │
+      ▼
+┌─────────────────────────┐
+│   Python socket module  │  ← thin wrapper written in C
+└────────────┬────────────┘
+             │  calls
+             ▼
+┌─────────────────────────┐
+│   C Standard Library    │  ← POSIX socket API
+│   (libc)                │
+└────────────┬────────────┘
+             │  calls
+             ▼
+┌─────────────────────────┐
+│   Linux Kernel          │  ← actual socket implementation
+│   System Calls          │     socket(), bind(), listen()
+│                         │     accept(), connect(), etc.
+└─────────────────────────┘
+             │
+             ▼
+┌─────────────────────────┐
+│   Network Interface     │  ← your physical/virtual NIC
+│   (eth0, lo, wlan0)     │
+└─────────────────────────┘
 
+┌─────────────────────────────────────────────────────┐
+│         PYTHON SOCKET FUNCTIONS           │
+├──────────────────┬──────────────────────────────────┤
+│ Function         │ Purpose                          │
+├──────────────────┼──────────────────────────────────┤
+│ socket()         │ Create a socket                  │
+│ bind()           │ Attach to IP + port              │
+│ listen()         │ Open for incoming connections    │
+│ accept()         │ Pull a client from queue         │
+│ connect()        │ Client connects to server        │
+│ send()           │ Send some bytes                  │
+│ sendall()        │ Send ALL bytes guaranteed        │
+│ recv()           │ Receive bytes                    │
+│ close()          │ Close the socket                 │
+│ shutdown()       │ Controlled half-close            │
+│ getsockname()    │ What is MY address?              │
+│ getpeername()    │ What is the OTHER side's address?│
+│ settimeout()     │ Set a time limit on operations   │
+│ setsockopt()     │ Configure socket behavior        │
+└──────────────────┴──────────────────────────────────┘
+
+Function 1 — socket()
+Purpose
+socket() creates a new socket object. Think of it as manufacturing the phone before you can make or receive calls. Nothing is connected yet. Nothing is bound to a port yet. You are simply creating the object that will represent your endpoint.
+Syntax
+pythonimport socket
+
+sock = socket.socket(family, type, proto)
+Parameters — Explained Deeply
+Parameter 1 — family (Address Family)
+This tells the socket what kind of addresses it will work with.
+┌────────────────────┬─────────────────────────────────────────┐
+│ Constant           │ Meaning                                 │
+├────────────────────┼─────────────────────────────────────────┤
+│ socket.AF_INET     │ IPv4 addresses (192.168.x.x)            │
+│                    │ Most common. We use this.               │
+├────────────────────┼─────────────────────────────────────────┤
+│ socket.AF_INET6    │ IPv6 addresses (2001:db8::1)            │
+│                    │ Newer, longer addresses                 │
+├────────────────────┼─────────────────────────────────────────┤
+│ socket.AF_UNIX     │ Unix domain sockets                     │
+│                    │ Communication between processes on      │
+│                    │ the SAME machine via a file path        │
+│                    │ e.g. /var/run/nginx.sock                │
+└────────────────────┴─────────────────────────────────────────┘
+AF_INET  → works across a network (internet/LAN)
+AF_UNIX  → works only on same machine, faster, no IP needed
+
+Example of AF_UNIX in real life:
+  Your browser talks to a local proxy via /tmp/proxy.sock
+  MySQL client talks to MySQL server via /var/run/mysql.sock
+Parameter 2 — type (Socket Type)
+This tells the socket how data is transmitted.
+┌─────────────────────┬────────────────────────────────────────┐
+│ Constant            │ Meaning                                │
+├─────────────────────┼────────────────────────────────────────┤
+│ socket.SOCK_STREAM  │ TCP — stream of bytes                  │
+│                     │ Connection-based, reliable, ordered    │
+│                     │ WE USE THIS                            │
+├─────────────────────┼────────────────────────────────────────┤
+│ socket.SOCK_DGRAM   │ UDP — individual datagrams             │
+│                     │ Connectionless, unreliable, fast       │
+├─────────────────────┼────────────────────────────────────────┤
+│ socket.SOCK_RAW     │ Raw socket                             │
+│                     │ Bypasses TCP/UDP entirely              │
+│                     │ Used in packet sniffers, Wireshark     │
+│                     │ Requires root                          │
+└─────────────────────┴────────────────────────────────────────┘
+Parameter 3 — proto (Protocol)
+Almost always 0. When it is 0, the OS automatically picks the correct protocol based on family and type.
+AF_INET + SOCK_STREAM + 0  →  OS picks TCP  (correct)
+AF_INET + SOCK_DGRAM  + 0  →  OS picks UDP  (correct)
+
+You only set this manually when using SOCK_RAW.
+Return Value
+Returns a socket object — a Python object that wraps a Linux file descriptor.
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+sock is now an object with:
+  sock.fileno()  → the integer file descriptor (e.g. 4)
+  sock.family    → AF_INET
+  sock.type      → SOCK_STREAM
+  sock.proto     → 0
+Exceptions
+┌──────────────────────┬──────────────────────────────────────┐
+│ Exception            │ When it happens                      │
+├──────────────────────┼──────────────────────────────────────┤
+│ socket.error         │ OS refused to create socket          │
+│ OSError              │ Same (socket.error is a subclass)    │
+│ PermissionError      │ Tried to use raw socket without root │
+└──────────────────────┴──────────────────────────────────────┘
+Internal Working
+YOUR CODE:
+  sock = socket.socket(AF_INET, SOCK_STREAM)
+         │
+         ▼
+PYTHON C EXTENSION:
+  Calls the C function socket(AF_INET, SOCK_STREAM, 0)
+         │
+         ▼
+LINUX KERNEL SYSTEM CALL:
+  sys_socket(AF_INET, SOCK_STREAM, 0)
+         │
+         ▼
+KERNEL ALLOCATES:
+  ┌──────────────────────────────────────────┐
+  │  struct socket {                         │
+  │    int fd = 4;          ← file descriptor│
+  │    type = SOCK_STREAM;                   │
+  │    state = UNCONNECTED; ← not bound yet  │
+  │    send_buffer = [];    ← empty          │
+  │    recv_buffer = [];    ← empty          │
+  │  }                                       │
+  └──────────────────────────────────────────┘
+         │
+         ▼
+RETURNS fd=4 to Python → Python wraps it in sock object
+Memory Behavior
+Creating a socket consumes kernel memory for:
+
+The socket struct itself
+A send buffer (default ~128KB)
+A receive buffer (default ~128KB)
+
+This is why you must always close() sockets — to free this kernel memory.
+Example
+pythonimport socket
+
+# Create a TCP socket using IPv4
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+print(sock)
+# <socket.socket fd=4, family=AddressFamily.AF_INET,
+#  type=SocketKind.SOCK_STREAM, proto=0>
+
+print(sock.fileno())   # 4  (the actual Linux file descriptor)
+print(sock.family)     # AddressFamily.AF_INET
+print(sock.type)       # SocketKind.SOCK_STREAM
+Visual State After socket()
+SOCKET STATE MACHINE:
+─────────────────────────────────────────────
+         socket()
+            │
+            ▼
+       ┌─────────┐
+       │ CREATED │  ← exists, but not bound,
+       │         │    not listening,
+       └─────────┘    not connected
+
+Function 2 — bind()
+Purpose
+bind() attaches your socket to a specific IP address and port on your machine. Before bind(), the socket exists but has no address. After bind(), the OS knows: "connections arriving at this IP:port belong to this socket."
+Think of it as putting your phone number on the front door of your office.
+Syntax
+pythonsock.bind((host, port))
+Note the double parentheses. The argument is a tuple (host, port), and you are passing that tuple as the single argument to bind().
+Parameters
+┌──────────┬──────────────────────────────────────────────────┐
+│ Parameter│ Meaning                                          │
+├──────────┼──────────────────────────────────────────────────┤
+│ host     │ String. The IP address to bind to.              │
+│          │                                                  │
+│          │ ''  or '0.0.0.0' → all interfaces               │
+│          │ '127.0.0.1'      → only local machine           │
+│          │ '192.168.1.50'   → only that specific interface │
+├──────────┼──────────────────────────────────────────────────┤
+│ port     │ Integer. Port number 0–65535.                   │
+│          │                                                  │
+│          │ 0    → OS picks a random free port              │
+│          │ 9000 → we request this specific port            │
+└──────────┴──────────────────────────────────────────────────┘
+Return Value
+None. It either succeeds silently or raises an exception.
+Exceptions
+┌──────────────────────┬──────────────────────────────────────┐
+│ Exception            │ When it happens                      │
+├──────────────────────┼──────────────────────────────────────┤
+│ OSError: [Errno 98]  │ Address already in use               │
+│ Address in use       │ Another program owns that port       │
+├──────────────────────┼──────────────────────────────────────┤
+│ OSError: [Errno 13]  │ Permission denied                    │
+│ Permission denied    │ Tried to bind port < 1024 as non-root│
+├──────────────────────┼──────────────────────────────────────┤
+│ OSError: [Errno 99]  │ Cannot assign requested address      │
+│                      │ IP doesn't exist on this machine     │
+└──────────────────────┴──────────────────────────────────────┘
+Internal Working
+sock.bind(('0.0.0.0', 9000))
+      │
+      ▼
+KERNEL SYSTEM CALL: sys_bind(fd=4, addr='0.0.0.0', port=9000)
+      │
+      ▼
+KERNEL CHECKS:
+  ┌─────────────────────────────────────────────┐
+  │ Is port 9000 already in use?                │
+  │   YES → raise OSError (Address in use)      │
+  │   NO  → continue                            │
+  │                                             │
+  │ Does IP 0.0.0.0 exist on this machine?      │
+  │   NO  → raise OSError (Cannot assign addr)  │
+  │   YES → continue                            │
+  │                                             │
+  │ Is port < 1024 and user is not root?        │
+  │   YES → raise PermissionError              │
+  │   NO  → continue                            │
+  └─────────────────────────────────────────────┘
+      │
+      ▼
+KERNEL REGISTERS:
+  port 9000 → fd=4 (your socket)
+  in its internal port table
+      │
+      ▼
+SUCCESS — socket is now addressable
+The "Address Already in Use" Problem
+This is the most common error beginners hit. Here is why it happens:
+TIMELINE:
+─────────────────────────────────────────────────────
+  1. You run your daemon on port 9000
+  2. You Ctrl+C to stop it
+  3. You immediately run it again
+  4. ERROR: Address already in use
+
+WHY?
+  When your program exits, the kernel keeps the port in
+  TIME_WAIT state for ~60 seconds.
+  This is a TCP safety feature — ensures all stale
+  packets from the old connection are gone.
+
+  TIME_WAIT state:
+  ┌─────────────────────────────────────────────┐
+  │  port 9000 → TIME_WAIT (60 seconds)         │
+  │  "I know this port just closed.             │
+  │   Waiting for stale packets to expire."     │
+  └─────────────────────────────────────────────┘
+The fix — setsockopt() with SO_REUSEADDR:
+pythonsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+# This MUST come before bind()
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+sock.bind(('0.0.0.0', 9000))
+This tells the kernel: "Let me reuse this port even if it's in TIME_WAIT." Every production server does this. We will always do this.
+Example
+pythonimport socket
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+sock.bind(('0.0.0.0', 9000))
+
+print("Socket bound to:", sock.getsockname())
+# Socket bound to: ('0.0.0.0', 9000)
+Visual State After bind()
+SOCKET STATE MACHINE:
+─────────────────────────────────────────────
+         socket()
+            │
+            ▼
+       ┌─────────┐
+       │ CREATED │
+       └────┬────┘
+            │  bind(('0.0.0.0', 9000))
+            ▼
+       ┌─────────┐
+       │  BOUND  │  ← has an address now
+       │         │    OS knows about it
+       └─────────┘    still not listening
+
+Function 3 — listen()
+Purpose
+listen() tells the kernel: "I am ready to accept incoming connections. Please start queuing them."
+This is the moment your daemon officially opens for business. Before listen(), even though you're bound to a port, the kernel will reject incoming connections. After listen(), the kernel creates the SYN queue and accept queue we studied in Phase 1.
+Syntax
+pythonsock.listen(backlog)
+Parameters
+┌──────────┬──────────────────────────────────────────────────┐
+│ Parameter│ Meaning                                          │
+├──────────┼──────────────────────────────────────────────────┤
+│ backlog  │ Integer. Max number of connections that can      │
+│          │ wait in the ACCEPT QUEUE before your code        │
+│          │ calls accept().                                  │
+│          │                                                  │
+│          │ Common values:                                   │
+│          │   5     → small/test server                     │
+│          │   10    → moderate load                         │
+│          │   128   → high load (nginx default)             │
+│          │   4096+ → very high load                        │
+│          │                                                  │
+│          │ In Python 3.5+, backlog is OPTIONAL.            │
+│          │ If omitted, Python picks a reasonable default.  │
+└──────────┴──────────────────────────────────────────────────┘
+Return Value
+None. Succeeds silently or raises an exception.
+Exceptions
+┌──────────────────────┬──────────────────────────────────────┐
+│ Exception            │ When it happens                      │
+├──────────────────────┼──────────────────────────────────────┤
+│ OSError              │ Socket not bound before listen()     │
+│                      │ Or socket already closed             │
+└──────────────────────┴──────────────────────────────────────┘
+Internal Working
+sock.listen(5)
+      │
+      ▼
+KERNEL SYSTEM CALL: sys_listen(fd=4, backlog=5)
+      │
+      ▼
+KERNEL CREATES TWO QUEUES for fd=4:
+
+  SYN QUEUE (incomplete handshakes):
+  ┌─────┬─────┬─────┬─────┬─────┐
+  │     │     │     │     │     │  ← max size controlled
+  └─────┴─────┴─────┴─────┴─────┘    by system setting
+                                       /proc/sys/net/ipv4/tcp_max_syn_backlog
+
+  ACCEPT QUEUE (complete handshakes):
+  ┌─────┬─────┬─────┬─────┬─────┐
+  │     │     │     │     │     │  ← max size = backlog (5)
+  └─────┴─────┴─────┴─────┴─────┘
+
+SOCKET STATE changes to: LISTENING
+      │
+      ▼
+Kernel now handles all SYN/SYN-ACK/ACK automatically.
+Your code does nothing until you call accept().
+What Happens With Different Backlog Values
+SCENARIO: 10 clients connect simultaneously
+          Your daemon is slow to call accept()
+
+backlog=2:
+  ┌───────┬───────┐
+  │client1│client2│  ← 2 fit in queue
+  └───────┴───────┘
+  clients 3-10 → RST → "Connection refused"   ✗ BAD
+
+backlog=10:
+  ┌──┬──┬──┬──┬──┬──┬──┬──┬──┬──┐
+  │1 │2 │3 │4 │5 │6 │7 │8 │9 │10│  ← all 10 fit
+  └──┴──┴──┴──┴──┴──┴──┴──┴──┴──┘
+  All clients wait patiently for accept()     ✓ GOOD
+Example
+pythonimport socket
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+sock.bind(('0.0.0.0', 9000))
+sock.listen(5)
+
+print("Daemon is listening on port 9000...")
+# Kernel is now managing connection queues.
+# Your code is NOT blocking here.
+# listen() returns immediately.
+Important: listen() does NOT block. It returns immediately. The blocking happens in accept().
+Visual State After listen()
+SOCKET STATE MACHINE:
+─────────────────────────────────────────────
+         socket()
+            │
+            ▼
+       ┌─────────┐
+       │ CREATED │
+       └────┬────┘
+            │  bind()
+            ▼
+       ┌─────────┐
+       │  BOUND  │
+       └────┬────┘
+            │  listen()
+            ▼
+       ┌───────────┐
+       │ LISTENING │  ← kernel managing queues
+       │           │    clients can now connect
+       └───────────┘    and will be queued
+
+Function 4 — accept()
+Purpose
+accept() pulls the next fully connected client from the accept queue and hands it to you. This is where your daemon actually meets a client for the first time.
+This is the most important function to understand deeply.
+Syntax
+pythonclient_socket, client_address = sock.accept()
+Return Value
+accept() returns a tuple of two things:
+┌───────────────────┬──────────────────────────────────────────┐
+│ Return Value      │ What it is                               │
+├───────────────────┼──────────────────────────────────────────┤
+│ client_socket     │ A NEW socket object                      │
+│                   │ This is your private channel to          │
+│                   │ this specific client.                    │
+│                   │ Use THIS to send/receive with client.    │
+├───────────────────┼──────────────────────────────────────────┤
+│ client_address    │ A tuple: (ip_string, port_int)           │
+│                   │ The client's IP and ephemeral port.      │
+│                   │ e.g. ('192.168.1.20', 54821)            │
+└───────────────────┴──────────────────────────────────────────┘
+Blocking Behavior
+accept() BLOCKS — your program pauses here until a client connects.
+YOUR DAEMON CODE:
+─────────────────────────────────────────────────────
+  print("waiting...")
+  client_sock, addr = sock.accept()   ← BLOCKS HERE
+  print("client connected!")          ← only runs after
+                                         someone connects
+
+TIMELINE:
+  t=0s   daemon reaches accept() → PAUSES
+  t=0s   ...waiting...
+  t=5s   ...waiting...
+  t=10s  a client connects!
+  t=10s  accept() returns → execution continues
+Internal Working
+client_sock, addr = sock.accept()
+         │
+         ▼
+KERNEL SYSTEM CALL: sys_accept(fd=4)
+         │
+         ▼
+IS ACCEPT QUEUE EMPTY?
+  ┌─────────────────────────────────────────────┐
+  │ YES → put your process to sleep             │
+  │       (BLOCKING — kernel wakes you when     │
+  │        a client completes handshake)        │
+  │                                             │
+  │ NO  → take first entry from accept queue   │
+  └─────────────────────────────────────────────┘
+         │
+         ▼
+KERNEL CREATES A NEW SOCKET (e.g. fd=5):
+  ┌──────────────────────────────────────────────┐
+  │  new socket {                                │
+  │    fd = 5                                    │
+  │    local_addr  = ('0.0.0.0', 9000)          │
+  │    remote_addr = ('192.168.1.20', 54821)    │
+  │    state = ESTABLISHED                       │
+  │  }                                           │
+  └──────────────────────────────────────────────┘
+         │
+         ▼
+RETURNS (new_socket_object, ('192.168.1.20', 54821))
+         │
+         ▼
+YOUR CODE:
+  client_sock → the new socket (fd=5)
+  addr        → ('192.168.1.20', 54821)
+
+ORIGINAL sock (fd=4) is STILL LISTENING.
+Nothing changed for it.
+The Two Sockets Visualized Again
+AFTER accept() RETURNS:
+════════════════════════════════════════════════════════
+
+  sock (fd=4)           client_sock (fd=5)
+  ─────────────         ──────────────────
+  LISTENING             ESTABLISHED
+  0.0.0.0:9000          local:  0.0.0.0:9000
+                         remote: 192.168.1.20:54821
+
+  Still waiting         Your private line
+  for MORE clients      to THIS client
+
+  ┌──────────┐          ┌──────────────┐
+  │ LISTENING│          │  YOUR CODE   │
+  │  SOCKET  │          │              │
+  │  fd=4    │          │  fd=5        │◄──► CLIENT
+  └──────────┘          └──────────────┘
+       │
+       │ next client connects
+       ▼
+  accept() again → fd=6 ◄──► CLIENT 2
+Exceptions
+┌──────────────────────┬──────────────────────────────────────┐
+│ Exception            │ When it happens                      │
+├──────────────────────┼──────────────────────────────────────┤
+│ OSError              │ Listening socket was closed          │
+├──────────────────────┼──────────────────────────────────────┤
+│ socket.timeout       │ If settimeout() was set and no       │
+│                      │ client connected in time             │
+└──────────────────────┴──────────────────────────────────────┘
+Example
+pythonimport socket
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+sock.bind(('0.0.0.0', 9000))
+sock.listen(5)
+
+print("Waiting for a client...")
+
+client_sock, client_addr = sock.accept()   # BLOCKS here
+
+print(f"Client connected from {client_addr[0]}:{client_addr[1]}")
+# Client connected from 192.168.1.20:54821
+
+Function 5 — connect()
+Purpose
+connect() is the client-side function. While accept() is what the server calls, connect() is what the client calls to initiate a connection to a server.
+connect() triggers the TCP three-way handshake from the client side.
+Syntax
+pythonsock.connect((host, port))
+Parameters
+┌──────────┬──────────────────────────────────────────────────┐
+│ Parameter│ Meaning                                          │
+├──────────┼──────────────────────────────────────────────────┤
+│ host     │ String. The server's IP or hostname.            │
+│          │ e.g. '192.168.1.50' or 'google.com'            │
+├──────────┼──────────────────────────────────────────────────┤
+│ port     │ Integer. The server's port.                     │
+│          │ e.g. 9000 for our daemon                        │
+└──────────┴──────────────────────────────────────────────────┘
+Return Value
+None on success. Blocks until handshake completes or fails.
+Internal Working
+client_sock.connect(('192.168.1.50', 9000))
+         │
+         ▼
+KERNEL:
+  1. Picks a random ephemeral port for client (e.g. 54821)
+  2. Sends SYN to 192.168.1.50:9000
+  3. Waits for SYN-ACK
+  4. Sends ACK
+  5. Connection ESTABLISHED
+         │
+         ▼
+connect() RETURNS (None)
+Your client can now send/receive.
+
+IF SERVER IS NOT RUNNING:
+  Kernel sends SYN, gets RST back (or timeout)
+  connect() raises ConnectionRefusedError
+Exceptions
+┌───────────────────────────┬──────────────────────────────────┐
+│ Exception                 │ When it happens                  │
+├───────────────────────────┼──────────────────────────────────┤
+│ ConnectionRefusedError    │ Server not running on that port  │
+├───────────────────────────┼──────────────────────────────────┤
+│ socket.timeout            │ Server didn't respond in time    │
+├───────────────────────────┼──────────────────────────────────┤
+│ OSError: Network          │ No route to host                 │
+│ unreachable               │ (wrong IP, not reachable)        │
+└───────────────────────────┴──────────────────────────────────┘
+Example
+pythonimport socket
+
+# This is CLIENT code
+client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+client.connect(('127.0.0.1', 9000))   # connect to our daemon
+
+print("Connected to server!")
+connect() vs accept() — The Dance
+SERVER SIDE                          CLIENT SIDE
+───────────                          ───────────
+sock.listen(5)
+                                     client.connect(('ip', 9000))
+                                           │
+                                           │ SYN ──────────────►
+                                           │         ◄────────── SYN-ACK
+                                           │ ACK ──────────────►
+                                           │
+                                     connect() RETURNS
+     accept() RETURNS
+client_sock, addr = ...
+
+Both sides now have an ESTABLISHED connection.
+
+Function 6 — send()
+Purpose
+send() transmits bytes from your socket to the other side. But here is the critical thing most beginners miss:
+
+send() does NOT guarantee that ALL bytes were sent.
+
+It sends as many bytes as the kernel's send buffer can accept right now and returns how many were actually sent.
+Syntax
+pythonbytes_sent = sock.send(data)
+Parameters
+┌──────────┬──────────────────────────────────────────────────┐
+│ Parameter│ Meaning                                          │
+├──────────┼──────────────────────────────────────────────────┤
+│ data     │ bytes object. Must be bytes, not string.        │
+│          │ e.g. b"hello"  or  "hello".encode('utf-8')      │
+└──────────┴──────────────────────────────────────────────────┘
+Return Value
+An integer — the number of bytes actually sent. This may be less than len(data).
+Why send() Can Send Less Than You Asked
+YOU WANT TO SEND: 1,000,000 bytes (1MB)
+
+KERNEL SEND BUFFER:
+  ┌──────────────────────────────────────────┐
+  │ Send Buffer (e.g. 128KB free right now)  │
+  │                                          │
+  │ [████████████████████░░░░░░░░░░░░░░░░░] │
+  │  ← already full with previous data →    │
+  │         only 50KB free right now         │
+  └──────────────────────────────────────────┘
+
+send(data_1MB) → only puts 50KB in buffer → returns 51200
+Your remaining 950KB was NOT sent!
+
+YOU ARE RESPONSIBLE for detecting this and resending the rest.
+Internal Working
+sock.send(b"Hello World")
+       │
+       ▼
+PYTHON converts string check → must be bytes
+       │
+       ▼
+KERNEL SYSTEM CALL: sys_send(fd=5, data, len)
+       │
+       ▼
+KERNEL COPIES data → socket's send buffer
+       │
+       ▼
+RETURNS number of bytes actually copied
+
+(separately, kernel's TCP stack drains
+ the send buffer and sends packets over network)
+Exceptions
+┌──────────────────────┬──────────────────────────────────────┐
+│ Exception            │ When it happens                      │
+├──────────────────────┼──────────────────────────────────────┤
+│ BrokenPipeError      │ Other side closed the connection     │
+├──────────────────────┼──────────────────────────────────────┤
+│ OSError              │ Socket not connected                 │
+├──────────────────────┼──────────────────────────────────────┤
+│ socket.timeout       │ Send timed out                       │
+└──────────────────────┴──────────────────────────────────────┘
+Example
+pythonmessage = "Hello from server!"
+data = message.encode('utf-8')     # convert string → bytes
+
+bytes_sent = client_sock.send(data)
+
+if bytes_sent < len(data):
+    print(f"WARNING: only sent {bytes_sent} of {len(data)} bytes!")
+
+Function 7 — sendall()
+Purpose
+sendall() solves the problem with send(). It keeps calling send() in a loop internally until ALL bytes have been sent. You should use sendall() in almost every situation.
+Syntax
+pythonsock.sendall(data)
+Return Value
+None on success. If it fails partway, it raises an exception.
+Internal Working
+sendall(data) internally does:
+
+  def sendall(data):
+      total_sent = 0
+      while total_sent < len(data):
+          sent = self.send(data[total_sent:])
+          if sent == 0:
+              raise RuntimeError("Socket connection broken")
+          total_sent += sent
+      # All bytes sent!
+
+This loop is implemented in C inside Python's socket module.
+send() vs sendall() — The Key Difference
+┌──────────────────────────────────────────────────────────┐
+│              send() vs sendall()                         │
+├──────────────────┬───────────────────────────────────────┤
+│ send()           │ sendall()                             │
+├──────────────────┼───────────────────────────────────────┤
+│ May send partial │ Sends everything or raises exception  │
+│ Returns int      │ Returns None                          │
+│ You loop manually│ Loops internally                      │
+│ Low level        │ High level (use this)                 │
+└──────────────────┴───────────────────────────────────────┘
+Example
+pythonmessage = "Hello from server!"
+client_sock.sendall(message.encode('utf-8'))
+# Guaranteed: all bytes sent or exception raised.
+# No need to check return value.
+
+Function 8 — recv()
+Purpose
+recv() receives bytes from the other side of the connection. It reads from the socket's receive buffer.
+Syntax
+pythondata = sock.recv(bufsize)
+Parameters
+┌──────────┬──────────────────────────────────────────────────┐
+│ Parameter│ Meaning                                          │
+├──────────┼──────────────────────────────────────────────────┤
+│ bufsize  │ Integer. Maximum number of bytes to receive      │
+│          │ in this call.                                    │
+│          │                                                  │
+│          │ Common values:                                   │
+│          │   1024   → 1KB  (small messages)                │
+│          │   4096   → 4KB  (typical)                       │
+│          │   65536  → 64KB (large transfers)               │
+│          │                                                  │
+│          │ IMPORTANT: this is a MAXIMUM, not exact.        │
+│          │ You may receive LESS than bufsize bytes.        │
+└──────────┴──────────────────────────────────────────────────┘
+Return Value
+┌──────────────────────┬──────────────────────────────────────┐
+│ Return Value         │ Meaning                              │
+├──────────────────────┼──────────────────────────────────────┤
+│ bytes object         │ The data received                    │
+│ e.g. b"Hello"        │                                      │
+├──────────────────────┼──────────────────────────────────────┤
+│ b""  (empty bytes)   │ THE OTHER SIDE CLOSED CONNECTION     │
+│                      │ This is how you detect disconnection │
+└──────────────────────┴──────────────────────────────────────┘
+The empty bytes return is critical. This is how TCP signals "the other side is done." You must always check for it.
+Blocking Behavior
+recv() BLOCKS until:
+
+Data is available → returns that data
+Other side closes connection → returns b""
+Timeout expires (if set) → raises socket.timeout
+
+Internal Working
+data = sock.recv(4096)
+       │
+       ▼
+KERNEL SYSTEM CALL: sys_recv(fd=5, buffer, 4096)
+       │
+       ▼
+IS RECEIVE BUFFER EMPTY?
+  YES → put process to sleep until data arrives
+  NO  → copy up to 4096 bytes from buffer to Python
+
+       │
+       ▼
+RETURNS bytes object
+
+Network layer (separately) is receiving packets
+from the network and filling the receive buffer.
+The recv() Problem — Message Boundaries
+This trips up every beginner. TCP is a stream — it has no concept of "messages". It is just bytes flowing.
+SENDER sends two messages:
+  sendall(b"Hello")    ← message 1
+  sendall(b"World")    ← message 2
+
+RECEIVER might recv() and get:
+  Case 1: b"Hello"  then b"World"  (two separate recvs) ✓
+  Case 2: b"HelloWorld"            (both in one recv)
+  Case 3: b"Hel"  then b"loWorld" (split arbitrarily)
+
+ALL THREE ARE VALID TCP BEHAVIOR.
+
+TCP does NOT preserve message boundaries.
+You need to implement your own protocol on top.
+(We will do this in Phase 3 and 5)
+Exceptions
+┌──────────────────────┬──────────────────────────────────────┐
+│ Exception            │ When it happens                      │
+├──────────────────────┼──────────────────────────────────────┤
+│ ConnectionResetError │ Other side crashed/killed abruptly   │
+├──────────────────────┼──────────────────────────────────────┤
+│ socket.timeout       │ No data within timeout period        │
+├──────────────────────┼──────────────────────────────────────┤
+│ OSError              │ Socket already closed                │
+└──────────────────────┴──────────────────────────────────────┘
+Example
+pythondata = client_sock.recv(4096)
+
+if data == b"":
+    print("Client disconnected!")
+else:
+    message = data.decode('utf-8')
+    print(f"Received: {message}")
+
+Function 9 — close()
+Purpose
+close() releases the socket and frees kernel resources. After close(), the socket cannot be used.
+Syntax
+pythonsock.close()
+What close() Actually Does
+sock.close()
+     │
+     ▼
+PYTHON:
+  Decrements the reference count on the socket object
+
+     │
+     ▼
+KERNEL:
+  ┌──────────────────────────────────────────────────┐
+  │ 1. Sends FIN packet to other side                │
+  │    (tells them "I'm done sending")               │
+  │                                                  │
+  │ 2. Enters TCP closing sequence:                  │
+  │    FIN → FIN-ACK → FIN → FIN-ACK                │
+  │                                                  │
+  │ 3. Port enters TIME_WAIT state                  │
+  │    (~60 seconds before fully released)           │
+  │                                                  │
+  │ 4. Frees send/receive buffers                   │
+  │                                                  │
+  │ 5. Removes fd from process's file table          │
+  └──────────────────────────────────────────────────┘
+TCP Connection Teardown (what happens when you close)
+ACTIVE CLOSE (you call close())      PASSIVE CLOSE (other side)
+────────────────────────────────────────────────────────────────
+YOUR SIDE                             OTHER SIDE
+    │                                     │
+    │─── FIN ────────────────────────────►│
+    │                                     │ (receives FIN)
+    │◄─── ACK ───────────────────────────│
+    │                                     │─── FIN ──────────►
+    │◄─── FIN ───────────────────────────│
+    │─── ACK ────────────────────────────►│
+    │                                     │
+  TIME_WAIT                           CLOSED
+  (wait ~60s)
+Example
+pythonclient_sock.sendall(b"Goodbye!")
+client_sock.close()   # done with this client
+
+# DON'T use client_sock after this point
+
+Function 10 — shutdown()
+Purpose
+shutdown() gives you finer control over closing — you can stop sending, stop receiving, or both, while keeping the socket object alive.
+Syntax
+pythonsock.shutdown(how)
+Parameters
+┌────────────────────────┬─────────────────────────────────────┐
+│ how                    │ Meaning                             │
+├────────────────────────┼─────────────────────────────────────┤
+│ socket.SHUT_RD   (= 0) │ Stop RECEIVING                     │
+│                        │ Any incoming data is discarded      │
+├────────────────────────┼─────────────────────────────────────┤
+│ socket.SHUT_WR   (= 1) │ Stop SENDING                       │
+│                        │ Sends FIN to other side             │
+│                        │ Signals "I'm done sending"          │
+├────────────────────────┼─────────────────────────────────────┤
+│ socket.SHUT_RDWR (= 2) │ Stop BOTH                          │
+│                        │ Like close() but socket obj remains │
+└────────────────────────┴─────────────────────────────────────┘
+shutdown() vs close()
+┌─────────────────────────────────────────────────────────────┐
+│               shutdown()  vs  close()                       │
+├──────────────────────┬──────────────────────────────────────┤
+│ shutdown()           │ close()                              │
+├──────────────────────┼──────────────────────────────────────┤
+│ Half-close possible  │ Full close only                      │
+│ Socket object stays  │ Socket object destroyed              │
+│ Can still recv after │ Cannot use socket at all             │
+│ SHUT_WR              │                                      │
+│ Used in protocols    │ Used when completely done            │
+│ like HTTP/1.0        │                                      │
+└──────────────────────┴──────────────────────────────────────┘
+Real World Use Case
+HTTP/1.0 request pattern:
+  1. Client sends request
+  2. Client calls shutdown(SHUT_WR)  ← "done sending request"
+  3. Server reads until recv() = b"" ← knows request is complete
+  4. Server sends response
+  5. Both call close()
+
+This is "half-duplex close" — one direction at a time.
+Example
+python# Signal to server that we're done sending
+# but we still want to receive the response
+client_sock.shutdown(socket.SHUT_WR)
+
+# Can still receive
+response = client_sock.recv(4096)
+print(response.decode())
+
+# Now fully close
+client_sock.close()
+
+Function 11 — getsockname()
+Purpose
+Returns your own socket's address — the IP and port that this socket is bound to.
+Syntax
+pythonaddr = sock.getsockname()
+Return Value
+A tuple (ip_string, port_int).
+Example
+pythonsock.bind(('0.0.0.0', 9000))
+print(sock.getsockname())
+# ('0.0.0.0', 9000)
+
+# Useful when you bind to port 0 (OS picks port):
+sock.bind(('0.0.0.0', 0))
+print(sock.getsockname())
+# ('0.0.0.0', 54923)  ← whatever the OS picked
+
+Function 12 — getpeername()
+Purpose
+Returns the other side's address — the IP and port of whoever you're connected to.
+Syntax
+pythonaddr = sock.getpeername()
+Return Value
+A tuple (ip_string, port_int).
+Example
+pythonclient_sock, _ = server_sock.accept()
+
+print(client_sock.getpeername())
+# ('192.168.1.20', 54821)  ← client's IP and port
+
+print(client_sock.getsockname())
+# ('0.0.0.0', 9000)        ← our side
+
+Function 13 — settimeout()
+Purpose
+Sets a time limit on blocking operations. Without a timeout, recv() and accept() wait forever. With a timeout, they raise socket.timeout if nothing happens within the specified seconds.
+Syntax
+pythonsock.settimeout(seconds)
+Parameters
+┌──────────┬──────────────────────────────────────────────────┐
+│ seconds  │ Meaning                                          │
+├──────────┼──────────────────────────────────────────────────┤
+│ float    │ Wait at most this many seconds                   │
+│          │ e.g. 5.0 = 5 seconds                            │
+├──────────┼──────────────────────────────────────────────────┤
+│ 0        │ Non-blocking mode                                │
+│          │ Operations fail instantly if not ready          │
+│          │ (raises BlockingIOError)                         │
+├──────────┼──────────────────────────────────────────────────┤
+│ None     │ Blocking mode (default)                         │
+│          │ Wait forever                                     │
+└──────────┴──────────────────────────────────────────────────┘
+Three Socket Modes
+┌─────────────────┬─────────────────────────────────────────┐
+│ Mode            │ Behavior                                │
+├─────────────────┼─────────────────────────────────────────┤
+│ BLOCKING        │ recv() waits forever for data           │
+│ settimeout(None)│ accept() waits forever for client       │
+│ (default)       │                                         │
+├─────────────────┼─────────────────────────────────────────┤
+│ TIMEOUT         │ recv() waits up to N seconds            │
+│ settimeout(5.0) │ then raises socket.timeout              │
+├─────────────────┼─────────────────────────────────────────┤
+│ NON-BLOCKING    │ recv() returns IMMEDIATELY              │
+│ settimeout(0)   │ raises BlockingIOError if no data       │
+│ or setblocking  │ Used with select()/asyncio              │
+│ (False)         │                                         │
+└─────────────────┴─────────────────────────────────────────┘
+Example
+pythonsock.settimeout(10.0)   # 10 second timeout
+
+try:
+    client_sock, addr = sock.accept()
+except socket.timeout:
+    print("No client connected within 10 seconds")
+
+Function 14 — setsockopt()
+Purpose
+setsockopt() configures low-level socket options — kernel-level settings that control socket behavior. This is the most powerful and complex socket function.
+Syntax
+pythonsock.setsockopt(level, optname, value)
+Parameters
+┌──────────┬──────────────────────────────────────────────────┐
+│ level    │ Which layer of the stack controls this option   │
+│          │                                                  │
+│          │ socket.SOL_SOCKET  → general socket options     │
+│          │ socket.IPPROTO_TCP → TCP-specific options       │
+│          │ socket.IPPROTO_IP  → IP-specific options        │
+├──────────┼──────────────────────────────────────────────────┤
+│ optname  │ Which specific option to set                    │
+├──────────┼──────────────────────────────────────────────────┤
+│ value    │ The value to set (usually 0 or 1)               │
+└──────────┴──────────────────────────────────────────────────┘
+Most Important Options
+┌─────────────────────────────────────────────────────────────┐
+│ THE OPTIONS YOU WILL ACTUALLY USE                           │
+├──────────────────────┬──────────────────────────────────────┤
+│ Option               │ What it does                        │
+├──────────────────────┼──────────────────────────────────────┤
+│ SOL_SOCKET           │                                     │
+│ SO_REUSEADDR=1       │ Reuse port in TIME_WAIT state       │
+│                      │ USE THIS ALWAYS on server sockets   │
+├──────────────────────┼──────────────────────────────────────┤
+│ SOL_SOCKET           │                                     │
+│ SO_KEEPALIVE=1       │ Send periodic keep-alive packets    │
+│                      │ Detects dead connections            │
+├──────────────────────┼──────────────────────────────────────┤
+│ IPPROTO_TCP          │                                     │
+│ TCP_NODELAY=1        │ Disable Nagle's algorithm           │
+│                      │ Send data immediately (lower        │
+│                      │ latency, used in games/SSH)         │
+├──────────────────────┼──────────────────────────────────────┤
+│ SOL_SOCKET           │                                     │
+│ SO_RCVBUF=size       │ Set receive buffer size             │
+├──────────────────────┼──────────────────────────────────────┤
+│ SOL_SOCKET           │                                     │
+│ SO_SNDBUF=size       │ Set send buffer size                │
+└──────────────────────┴──────────────────────────────────────┘
+What is Nagle's Algorithm?
+WITHOUT TCP_NODELAY (Nagle's algorithm ON — default):
+══════════════════════════════════════════════════════
+  You send b"H"
+  Kernel: "That's tiny. Let me wait 200ms for more data
+           so I can bundle it into one packet."
+  You send b"i"
+  Kernel: "Still small. Waiting..."
+  200ms passes
+  Kernel sends b"Hi" as one packet.
+
+  GOOD for: bulk file transfer (fewer packets)
+  BAD for:  SSH, games, chat (you feel the 200ms delay)
+
+
+WITH TCP_NODELAY=1:
+══════════════════
+  You send b"H"  → kernel sends immediately
+  You send b"i"  → kernel sends immediately
+
+  GOOD for: interactive applications
+  BAD for:  creates more small packets (more overhead)
+Example
+pythonimport socket
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+# Must-have for every server:
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+# For interactive/chat daemon (disable Nagle):
+sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+# Enable keep-alive:
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+
+sock.bind(('0.0.0.0', 9000))
+
+Phase 2 — Complete Function Reference
+╔══════════════════════════════════════════════════════════════════╗
+║              SOCKET FUNCTION QUICK REFERENCE                    ║
+╠══════════════════════╦═══════════════════╦══════════════════════╣
+║ Function             ║ Blocks?           ║ Used by              ║
+╠══════════════════════╬═══════════════════╬══════════════════════╣
+║ socket()             ║ No                ║ Both                 ║
+║ bind()               ║ No                ║ Server               ║
+║ listen()             ║ No                ║ Server               ║
+║ accept()             ║ YES               ║ Server               ║
+║ connect()            ║ YES               ║ Client               ║
+║ send()               ║ Sometimes         ║ Both                 ║
+║ sendall()            ║ YES (until done)  ║ Both                 ║
+║ recv()               ║ YES               ║ Both                 ║
+║ close()              ║ No                ║ Both                 ║
+║ shutdown()           ║ No                ║ Both                 ║
+║ getsockname()        ║ No                ║ Both                 ║
+║ getpeername()        ║ No                ║ Both                 ║
+║ settimeout()         ║ No                ║ Both                 ║
+║ setsockopt()         ║ No                ║ Both                 ║
+╚══════════════════════╩═══════════════════╩══════════════════════╝
