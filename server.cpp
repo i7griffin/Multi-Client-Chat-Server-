@@ -50,6 +50,23 @@ int main()
         return 1;
     }
 
+    /*listen function has two parameters
+    1.is the the file descriptor
+    2.is the backlog paramater , this tells or enacts like the size of the waiting room of
+    incoming connecctions from which the accept function works on
+    i.e it is a queue of connections that have completed the TCP handshake
+    */
+    result = listen(server_fd, 5);
+
+    if (result == -1)
+    {
+        cout << "Listen failed: " << strerror(errno) << endl;
+        close(server_fd);
+        return 1;
+    }
+
+    cout << "The server is listening" << endl;
+
     close(server_fd);
 
     return 0;
