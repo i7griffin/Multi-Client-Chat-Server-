@@ -64,45 +64,55 @@ int main()
 
     cout << "Connected to server!" << endl;
 
-    // Creating the message to send to the server
-    const char *message = "Hello from client!";
-
-    // signed representation of the amount of the bytes to send to the server
-    ssize_t bytes_sent = send(client_fd, message, strlen(message), 0);
-
-    if (bytes_sent == -1)
+    // this loop is to send message till the client doesnt want to send anymore
+    while (true)
     {
-        cout << "Send failed: " << strerror(errno) << endl;
-        close(client_fd);
-        return 1;
-    }
+        string line;
 
-    cout << "Sent " << bytes_sent << " bytes" << endl;
+        getline(cin, line);
 
-    // creating the buffer to rexeive the server's echo back as a reply to the message sent
-    char buffer[1024];
+        if (line == "quit")
+        {
+            break;
+        }
 
-    // emptying or zeroing out the buffer to store the echo that is sent from the server
-    memset(buffer, 0, sizeof(buffer));
+        ssize_t bytes_sent = send(client_fd, line.c_str(), line.length(), 0);
 
-    ssize_t bytes_received = recv(client_fd, buffer, sizeof(buffer), 0);
+        if (bytes_sent == -1)
+        {
+            cout << "Send failed: " << strerror(errno) << endl;
+            close(client_fd);
+            return 1;
+        }
 
-    if (bytes_received == -1)
-    {
-        cout << "Receive failed: " << strerror(errno) << endl;
-        close(client_fd);
-        return 1;
-    }
+        cout << "Sent " << bytes_sent << " bytes" << endl;
 
-    if (bytes_received == 0)
-    {
-        cout << "Server disconnected." << endl;
-    }
-    else
-    {
-        cout << "Server replied: ";
-        cout.write(buffer, bytes_received);
-        cout << endl;
+        // creating the buffer to rexeive the server's echo back as a reply
+        char buffer[1024];
+
+        // emptying or zeroing out the buffer to store the echo that is sent from the server
+        memset(buffer, 0, sizeof(buffer));
+
+        ssize_t bytes_received = recv(client_fd, buffer, sizeof(buffer), 0);
+
+        if (bytes_received == -1)
+        {
+            cout << "Receive failed: " << strerror(errno) << endl;
+            close(client_fd);
+            return 1;
+        }
+
+        if (bytes_received == 0)
+        {
+            cout << "Server disconnected." << endl;
+            break;
+        }
+        else
+        {
+            cout << "Server replied: ";
+            cout.write(buffer, bytes_received);
+            cout << endl;
+        }
     }
 
     close(client_fd);

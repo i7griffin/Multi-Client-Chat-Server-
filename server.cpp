@@ -85,43 +85,50 @@ int main()
     cout << "Client connected!" << endl;
     cout << "Client file descriptor: " << client_fd << endl;
 
-    char message[1024];
-
-    // emptying the message block before writing new data
-    memset(message, 0, sizeof(message));
-
-    ssize_t bytes_received = recv(client_fd, message, sizeof(message), 0);
-
-    if (bytes_received == -1)
+    while (true)
     {
-        cout << "Receive failed: " << strerror(errno) << endl;
-        close(client_fd);
-        close(server_fd);
-        return 1;
-    }
+        char message[1024];
 
-    if (bytes_received == 0)
-    {
-        cout << "Client disconnected." << endl;
-    }
-    else
-    {
+        memset(message, 0, sizeof(message));
+
+        ssize_t bytes_received = recv(
+            client_fd,
+            message,
+            sizeof(message),
+            0);
+
+        if (bytes_received == -1)
+        {
+            cout << "Receive failed: " << strerror(errno) << endl;
+            close(client_fd);
+            close(server_fd);
+            return 1;
+        }
+
+        if (bytes_received == 0)
+        {
+            cout << "Client disconnected." << endl;
+            break;
+        }
+
         cout << "Received: ";
         cout.write(message, bytes_received);
         cout << endl;
 
-        ssize_t bytes_sent = send(client_fd, message, bytes_received, 0);
+        ssize_t bytes_sent = send(
+            client_fd,
+            message,
+            bytes_received,
+            0);
 
         if (bytes_sent == -1)
         {
             cout << "Send failed: " << strerror(errno) << endl;
+            break;
         }
-        else
-        {
-            cout << "Sent " << bytes_sent << " bytes" << endl;
-        }
-    }
 
+        cout << "Sent " << bytes_sent << " bytes" << endl;
+    }
     close(client_fd);
     close(server_fd);
 
