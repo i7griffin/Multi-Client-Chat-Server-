@@ -70,11 +70,10 @@ int main()
     sockaddr_in client_addr;
     socklen_t client_addr_len = sizeof(client_addr);
 
-
-    /*we are assigning a file descriptor to a client conenction request 
-    By default now the accept function is of the blocking type 
+    /*we are assigning a file descriptor to a client conenction request
+    By default now the accept function is of the blocking type
     i.e it blocks the calling thread till connection is found */
-    int client_fd = accept(server_fd,(struct sockaddr *)&client_addr,&client_addr_len);
+    int client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len);
 
     if (client_fd == -1)
     {
@@ -85,6 +84,43 @@ int main()
 
     cout << "Client connected!" << endl;
     cout << "Client file descriptor: " << client_fd << endl;
+
+    char message[1024];
+
+    // emptying the message block before writing new data
+    memset(message, 0, sizeof(message));
+
+    ssize_t bytes_received = recv(client_fd, message, sizeof(message), 0);
+
+    if (bytes_received == -1)
+    {
+        cout << "Receive failed: " << strerror(errno) << endl;
+        close(client_fd);
+        close(server_fd);
+        return 1;
+    }
+
+    if (bytes_received == 0)
+    {
+        cout << "Client disconnected." << endl;
+    }
+    else
+    {
+        cout << "Received: ";
+        cout.write(message, bytes_received);
+        cout << endl;
+
+        ssize_t bytes_sent = send(client_fd, message, bytes_received, 0);
+
+        if (bytes_sent == -1)
+        {
+            cout << "Send failed: " << strerror(errno) << endl;
+        }
+        else
+        {
+            cout << "Sent " << bytes_sent << " bytes" << endl;
+        }
+    }
 
     close(client_fd);
     close(server_fd);
