@@ -67,6 +67,26 @@ int main()
 
     cout << "The server is listening" << endl;
 
+    sockaddr_in client_addr;
+    socklen_t client_addr_len = sizeof(client_addr);
+
+
+    /*we are assigning a file descriptor to a client conenction request 
+    By default now the accept function is of the blocking type 
+    i.e it blocks the calling thread till connection is found */
+    int client_fd = accept(server_fd,(struct sockaddr *)&client_addr,&client_addr_len);
+
+    if (client_fd == -1)
+    {
+        cout << "Accept failed: " << strerror(errno) << endl;
+        close(server_fd);
+        return 1;
+    }
+
+    cout << "Client connected!" << endl;
+    cout << "Client file descriptor: " << client_fd << endl;
+
+    close(client_fd);
     close(server_fd);
 
     return 0;
