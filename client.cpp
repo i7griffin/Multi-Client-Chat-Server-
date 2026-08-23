@@ -5,8 +5,52 @@
 #include <cstring>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <thread>
+#include <mutex>
 
 using namespace std;
+
+mutex cout_mutex;
+
+void receive_loop(int client_fd)
+{
+    while (true)
+    {
+        char buffer[1024];
+
+        memset(buffer, 0, sizeof(buffer));
+
+        ssize_t bytes_received = recv(client_fd, buffer, sizeof(buffer), 0);
+
+        if (bytes_received == -1)
+        {
+            {
+                lock_guard<mutex> lock(cout_mutex);
+                cout << "Receive failed: " << strerror(errno) << endl;
+            }
+
+            exit(0);
+        }
+
+        if (bytes_received == 0)
+        {
+            {
+                lock_guard<mutex> lock(cout_mutex);
+                cout << "Server disconnected." << endl;
+            }
+
+            exit(0);
+        }
+
+        {
+            lock_guard<mutex> lock(cout_mutex);
+
+            cout << "Server replied: ";
+            cout.write(buffer, bytes_received);
+            cout << endl;
+        }
+    }
+}
 
 int main()
 {
@@ -64,6 +108,9 @@ int main()
 
     cout << "Connected to server!" << endl;
 
+    thread recv_thread(receive_loop, client_fd);
+    recv_thread.detach();
+
     // this loop is to send message till the client doesnt want to send anymore
     while (true)
     {
@@ -80,38 +127,15 @@ int main()
 
         if (bytes_sent == -1)
         {
+            lock_guard<mutex> lock(cout_mutex);
             cout << "Send failed: " << strerror(errno) << endl;
             close(client_fd);
             return 1;
         }
 
-        cout << "Sent " << bytes_sent << " bytes" << endl;
-
-        // creating the buffer to rexeive the server's echo back as a reply
-        char buffer[1024];
-
-        // emptying or zeroing out the buffer to store the echo that is sent from the server
-        memset(buffer, 0, sizeof(buffer));
-
-        ssize_t bytes_received = recv(client_fd, buffer, sizeof(buffer), 0);
-
-        if (bytes_received == -1)
         {
-            cout << "Receive failed: " << strerror(errno) << endl;
-            close(client_fd);
-            return 1;
-        }
-
-        if (bytes_received == 0)
-        {
-            cout << "Server disconnected." << endl;
-            break;
-        }
-        else
-        {
-            cout << "Server replied: ";
-            cout.write(buffer, bytes_received);
-            cout << endl;
+            lock_guard<mutex> lock(cout_mutex);
+            cout << "Sent " << bytes_sent << " bytes" << endl;
         }
     }
 
