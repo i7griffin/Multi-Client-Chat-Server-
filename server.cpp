@@ -6,8 +6,11 @@
 // header for socaddr_in and htons
 #include <netinet/in.h>
 #include <thread>
+#include <mutex>
 
 using namespace std;
+
+mutex cout_mutex;
 
 void handle_client(int client_fd)
 {
@@ -17,33 +20,48 @@ void handle_client(int client_fd)
 
         memset(message, 0, sizeof(message));
 
-        ssize_t bytes_received = recv( client_fd, message, sizeof(message), 0);
+        ssize_t bytes_received = recv(client_fd, message, sizeof(message), 0);
 
         if (bytes_received == -1)
         {
+            lock_guard<mutex> lock(cout_mutex);
+            /*RAII stands for Resource Acquisition Is Initialization
+            lock gaurd is a RAII object which handles the resource lifetime over
+            objects' lifetime destroys the resource after it goes out of scope
+            no need to manually unlock after the critical part of the code*/
             cout << "Receive failed: " << strerror(errno) << endl;
             break;
         }
 
         if (bytes_received == 0)
         {
+            lock_guard<mutex> lock(cout_mutex);
             cout << "Client disconnected." << endl;
             break;
         }
 
-        cout << "Received: ";
-        cout.write(message, bytes_received);
-        cout << endl;
+        {
+            lock_guard<mutex> lock(cout_mutex);
 
-        ssize_t bytes_sent = send(client_fd,message,bytes_received,0);
+            cout << "Received: ";
+            cout.write(message, bytes_received);
+            cout << endl;
+        }
+
+        ssize_t bytes_sent = send(client_fd, message, bytes_received, 0);
 
         if (bytes_sent == -1)
         {
+            lock_guard<mutex> lock(cout_mutex);
             cout << "Send failed: " << strerror(errno) << endl;
             break;
         }
 
-        cout << "Sent " << bytes_sent << " bytes" << endl;
+        {
+            lock_guard<mutex> lock(cout_mutex);
+
+            cout << "Sent " << bytes_sent << " bytes" << endl;
+        }
     }
 
     close(client_fd);
@@ -55,12 +73,17 @@ int main()
 
     if (server_fd == -1)
     {
+        lock_guard<mutex> lock(cout_mutex);
         cout << "Error: " << strerror(errno) << endl;
         return 1;
     }
 
-    cout << "Socket created successfully!" << endl;
-    cout << "File descriptor: " << server_fd << endl;
+    {
+        lock_guard<mutex> lock(cout_mutex);
+
+        cout << "Socket created successfully!" << endl;
+        cout << "File descriptor: " << server_fd << endl;
+    }
 
     // this is the structure for server address
     struct sockaddr_in server_addr;
@@ -86,6 +109,7 @@ int main()
     // and the function running in that thread can read or set that threads content
     if (result == -1)
     {
+        lock_guard<mutex> lock(cout_mutex);
         cout << "Bind failed: " << strerror(errno) << endl;
         close(server_fd);
         return 1;
@@ -101,12 +125,16 @@ int main()
 
     if (result == -1)
     {
+        lock_guard<mutex> lock(cout_mutex);
         cout << "Listen failed: " << strerror(errno) << endl;
         close(server_fd);
         return 1;
     }
 
-    cout << "The server is listening" << endl;
+    {
+        lock_guard<mutex> lock(cout_mutex);
+        cout << "The server is listening" << endl;
+    }
 
     while (true)
     {
@@ -120,20 +148,24 @@ int main()
 
         if (client_fd == -1)
         {
+            lock_guard<mutex> lock(cout_mutex);
             cout << "Accept failed: " << strerror(errno) << endl;
             continue;
         }
 
-        cout << "Client connected!" << endl;
-        cout << "Client file descriptor: " << client_fd << endl;
+        {
+            lock_guard<mutex> lock(cout_mutex);
 
-        /*we are creating an another thread and calling the handle client function 
+            cout << "Client connected!" << endl;
+            cout << "Client file descriptor: " << client_fd << endl;
+        }
+
+        /*we are creating an another thread and calling the handle client function
         with client file descriptor as parameter on another thread .
         because i do not want the main function itself to enter the function and stall or something*/
         thread client_thread(handle_client, client_fd);
 
-
-        /*using detach of the particualr thread helps because it enables it to run on its own. even if the mainthread 
+        /*using detach of the particualr thread helps because it enables it to run on its own. even if the mainthread
         goes on to end */
         client_thread.detach();
     }
