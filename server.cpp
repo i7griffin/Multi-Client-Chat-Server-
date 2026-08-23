@@ -52,19 +52,38 @@ void handle_client(int client_fd)
             cout << endl;
         }
 
-        ssize_t bytes_sent = send(client_fd, message, bytes_received, 0);
+        bool send_failed = false;
+        int failed_fd = -1;
+        int send_error = 0;
 
-        if (bytes_sent == -1)
         {
-            lock_guard<mutex> lock(cout_mutex);
-            cout << "Send failed: " << strerror(errno) << endl;
-            break;
+            lock_guard<mutex> lock(clients_mutex);
+
+            for (int fd : client_fds)
+            {
+                if (fd == client_fd)
+                {
+                    continue;
+                }
+
+                ssize_t bytes_sent = send(fd, message, bytes_received, 0);
+
+                if (bytes_sent == -1)
+                {
+                    send_failed = true;
+                    failed_fd = fd;
+                    send_error = errno;
+                }
+            }
         }
 
+        if (send_failed)
         {
             lock_guard<mutex> lock(cout_mutex);
 
-            cout << "Sent " << bytes_sent << " bytes" << endl;
+            cout << "Send failed for client "
+                 << failed_fd << ": "
+                 << strerror(send_error) << endl;
         }
     }
 
