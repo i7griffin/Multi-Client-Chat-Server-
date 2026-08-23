@@ -1,0 +1,12 @@
+Server:
+
+g++ -Wall -Wextra -pthread -o server main.cpp
+./server
+
+Client
+
+bash
+g++ -Wall -Wextra -o client client.cpp
+./client
+
+## -pthread option is must to run the server.cpp because without that std:thread wont link 

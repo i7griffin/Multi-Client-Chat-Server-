@@ -5,8 +5,49 @@
 #include <cstring>
 // header for socaddr_in and htons
 #include <netinet/in.h>
+#include <thread>
 
 using namespace std;
+
+void handle_client(int client_fd)
+{
+    while (true)
+    {
+        char message[1024];
+
+        memset(message, 0, sizeof(message));
+
+        ssize_t bytes_received = recv( client_fd, message, sizeof(message), 0);
+
+        if (bytes_received == -1)
+        {
+            cout << "Receive failed: " << strerror(errno) << endl;
+            break;
+        }
+
+        if (bytes_received == 0)
+        {
+            cout << "Client disconnected." << endl;
+            break;
+        }
+
+        cout << "Received: ";
+        cout.write(message, bytes_received);
+        cout << endl;
+
+        ssize_t bytes_sent = send(client_fd,message,bytes_received,0);
+
+        if (bytes_sent == -1)
+        {
+            cout << "Send failed: " << strerror(errno) << endl;
+            break;
+        }
+
+        cout << "Sent " << bytes_sent << " bytes" << endl;
+    }
+
+    close(client_fd);
+}
 
 int main()
 {
@@ -67,69 +108,36 @@ int main()
 
     cout << "The server is listening" << endl;
 
-    sockaddr_in client_addr;
-    socklen_t client_addr_len = sizeof(client_addr);
-
-    /*we are assigning a file descriptor to a client conenction request
-    By default now the accept function is of the blocking type
-    i.e it blocks the calling thread till connection is found */
-    int client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len);
-
-    if (client_fd == -1)
-    {
-        cout << "Accept failed: " << strerror(errno) << endl;
-        close(server_fd);
-        return 1;
-    }
-
-    cout << "Client connected!" << endl;
-    cout << "Client file descriptor: " << client_fd << endl;
-
     while (true)
     {
-        char message[1024];
+        sockaddr_in client_addr;
+        socklen_t client_addr_len = sizeof(client_addr);
 
-        memset(message, 0, sizeof(message));
+        /*we are assigning a file descriptor to a client conenction request
+        By default now the accept function is of the blocking type
+        i.e it blocks the calling thread till connection is found */
+        int client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len);
 
-        ssize_t bytes_received = recv(
-            client_fd,
-            message,
-            sizeof(message),
-            0);
-
-        if (bytes_received == -1)
+        if (client_fd == -1)
         {
-            cout << "Receive failed: " << strerror(errno) << endl;
-            close(client_fd);
-            close(server_fd);
-            return 1;
+            cout << "Accept failed: " << strerror(errno) << endl;
+            continue;
         }
 
-        if (bytes_received == 0)
-        {
-            cout << "Client disconnected." << endl;
-            break;
-        }
+        cout << "Client connected!" << endl;
+        cout << "Client file descriptor: " << client_fd << endl;
 
-        cout << "Received: ";
-        cout.write(message, bytes_received);
-        cout << endl;
+        /*we are creating an another thread and calling the handle client function 
+        with client file descriptor as parameter on another thread .
+        because i do not want the main function itself to enter the function and stall or something*/
+        thread client_thread(handle_client, client_fd);
 
-        ssize_t bytes_sent = send(
-            client_fd,
-            message,
-            bytes_received,
-            0);
 
-        if (bytes_sent == -1)
-        {
-            cout << "Send failed: " << strerror(errno) << endl;
-            break;
-        }
-
-        cout << "Sent " << bytes_sent << " bytes" << endl;
+        /*using detach of the particualr thread helps because it enables it to run on its own. even if the mainthread 
+        goes on to end */
+        client_thread.detach();
     }
-    close(client_fd);
+
     close(server_fd);
 
     return 0;
