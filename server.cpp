@@ -7,10 +7,14 @@
 #include <netinet/in.h>
 #include <thread>
 #include <mutex>
+#include <vector>
 
 using namespace std;
 
 mutex cout_mutex;
+mutex clients_mutex;
+
+vector<int> client_fds;
 
 void handle_client(int client_fd)
 {
@@ -61,6 +65,19 @@ void handle_client(int client_fd)
             lock_guard<mutex> lock(cout_mutex);
 
             cout << "Sent " << bytes_sent << " bytes" << endl;
+        }
+    }
+
+    {
+        lock_guard<mutex> lock(clients_mutex);
+
+        for (auto it = client_fds.begin(); it != client_fds.end(); ++it)
+        {
+            if (*it == client_fd)
+            {
+                client_fds.erase(it);
+                break;
+            }
         }
     }
 
@@ -158,6 +175,12 @@ int main()
 
             cout << "Client connected!" << endl;
             cout << "Client file descriptor: " << client_fd << endl;
+        }
+
+        {
+            lock_guard<mutex> lock(clients_mutex);
+
+            client_fds.push_back(client_fd);
         }
 
         /*we are creating an another thread and calling the handle client function
