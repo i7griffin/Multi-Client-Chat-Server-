@@ -11,15 +11,106 @@
 
 using namespace std;
 
-/*two different locks for the clients array and separate lock for cout .the locks for the clients array 
+/*two different locks for the clients array and separate lock for cout .the locks for the clients array
 for the fd to removed or added only by one thread and prevents other thread trying to access it at the same time .*/
-//to prevent race condition
+// to prevent race condition
 mutex cout_mutex;
 mutex clients_mutex;
 
 vector<int> client_fds;
 
-bool recv_exact(int fd, char* buffer, size_t num_bytes)
+const size_t MAX_MESSAGE_SIZE = 1024;
+bool recv_exact(int fd, char *buffer, size_t num_bytes) ;
+bool send_message(int fd, const string &message);
+bool recv_message(int fd, string &out_message);
+
+bool send_message(int fd, const string &message)
+{
+    uint32_t message_length = message.length();
+
+    if (message_length > MAX_MESSAGE_SIZE)
+    {
+        return false;
+    }
+
+    // htonl means home to network long
+    /*we need to convert it because irrespective of what order each computer use , the
+    standard network byte order is big endian */
+
+    /*But the number is represented in your computer's host byte order.
+
+    htonl() converts the 32-bit value to network byte order.*/
+    uint32_t network_length = htonl(message_length);
+
+    ssize_t bytes_sent = send(fd, &network_length, sizeof(network_length), 0);
+
+    if (bytes_sent == -1)
+    {
+        return false;
+    }
+
+    if (bytes_sent != sizeof(network_length))
+    {
+        return false;
+    }
+
+    if (message_length == 0)
+    {
+        return true;
+    }
+
+    bytes_sent = send(fd, message.data(), message_length, 0);
+
+    if (bytes_sent == -1)
+    {
+        return false;
+    }
+
+    if (bytes_sent != message_length)
+    {
+        return false;
+    }
+
+    return true;
+}
+
+bool recv_message(int fd, string &out_message)
+{
+    uint32_t network_length;
+
+    bool success = recv_exact( fd, reinterpret_cast<char *>(&network_length), sizeof(network_length));
+
+    if (!success)
+    {
+        return false;
+    }
+
+    uint32_t message_length = ntohl(network_length);
+
+    if (message_length > MAX_MESSAGE_SIZE)
+    {
+        return false;
+    }
+
+    out_message.resize(message_length);
+
+    if (message_length == 0)
+    {
+        return true;
+    }
+
+    success = recv_exact( fd, out_message.data(), message_length);
+
+    if (!success)
+    {
+        out_message.clear();
+        return false;
+    }
+
+    return true;
+}
+
+bool recv_exact(int fd, char *buffer, size_t num_bytes)
 {
     size_t bytes_received = 0;
 
@@ -29,8 +120,7 @@ bool recv_exact(int fd, char* buffer, size_t num_bytes)
             fd,
             buffer + bytes_received,
             num_bytes - bytes_received,
-            0
-        );
+            0);
 
         if (result == 0)
         {
