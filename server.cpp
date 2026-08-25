@@ -19,6 +19,35 @@ mutex clients_mutex;
 
 vector<int> client_fds;
 
+bool recv_exact(int fd, char* buffer, size_t num_bytes)
+{
+    size_t bytes_received = 0;
+
+    while (bytes_received < num_bytes)
+    {
+        ssize_t result = recv(
+            fd,
+            buffer + bytes_received,
+            num_bytes - bytes_received,
+            0
+        );
+
+        if (result == 0)
+        {
+            return false;
+        }
+
+        if (result == -1)
+        {
+            return false;
+        }
+
+        bytes_received += result;
+    }
+
+    return true;
+}
+
 void handle_client(int client_fd)
 {
     while (true)
