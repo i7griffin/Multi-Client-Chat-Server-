@@ -11,6 +11,9 @@
 
 using namespace std;
 
+/*two different locks for the clients array and separate lock for cout .the locks for the clients array 
+for the fd to removed or added only by one thread and prevents other thread trying to access it at the same time .*/
+//to prevent race condition
 mutex cout_mutex;
 mutex clients_mutex;
 

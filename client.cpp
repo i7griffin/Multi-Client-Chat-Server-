@@ -25,6 +25,7 @@ void receive_loop(int client_fd)
         if (bytes_received == -1)
         {
             {
+                //this mutex loxk is for cout things 
                 lock_guard<mutex> lock(cout_mutex);
                 cout << "Receive failed: " << strerror(errno) << endl;
             }
