@@ -12,32 +12,143 @@ using namespace std;
 
 mutex cout_mutex;
 
+const size_t MAX_MESSAGE_SIZE = 1024;
+
+bool recv_exact(int fd, char *buffer, size_t num_bytes)
+{
+    size_t bytes_received = 0;
+
+    while (bytes_received < num_bytes)
+    {
+        ssize_t result = recv(fd, buffer + bytes_received, num_bytes - bytes_received, 0);
+
+        if (result == 0)
+        {
+            return false;
+        }
+
+        if (result == -1)
+        {
+            return false;
+        }
+
+        bytes_received += result;
+    }
+
+    return true;
+}
+
+bool send_message(int fd, const string &message)
+{
+    uint32_t message_length = message.length();
+
+    if (message_length > MAX_MESSAGE_SIZE)
+    {
+        return false;
+    }
+
+    // htonl means home to network long
+    /*we need to convert it because irrespective of what order each computer use , the
+    standard network byte order is big endian */
+    uint32_t network_length = htonl(message_length);
+
+    ssize_t bytes_sent = send(
+        fd,
+        &network_length,
+        sizeof(network_length),
+        0);
+
+    if (bytes_sent == -1)
+    {
+        return false;
+    }
+
+    if (bytes_sent != sizeof(network_length))
+    {
+        return false;
+    }
+
+    if (message_length == 0)
+    {
+        return true;
+    }
+
+    bytes_sent = send(
+        fd,
+        message.data(),
+        message_length,
+        0);
+
+    if (bytes_sent == -1)
+    {
+        return false;
+    }
+
+    if (bytes_sent != message_length)
+    {
+        return false;
+    }
+
+    return true;
+}
+
+bool recv_message(int fd, string &out_message)
+{
+    uint32_t network_length;
+
+    bool success = recv_exact(
+        fd,
+        reinterpret_cast<char *>(&network_length),
+        sizeof(network_length));
+
+    if (!success)
+    {
+        return false;
+    }
+
+    uint32_t message_length = ntohl(network_length);
+
+    if (message_length > MAX_MESSAGE_SIZE)
+    {
+        return false;
+    }
+
+    out_message.resize(message_length);
+
+    if (message_length == 0)
+    {
+        return true;
+    }
+
+    success = recv_exact(
+        fd,
+        out_message.data(),
+        message_length);
+
+    if (!success)
+    {
+        out_message.clear();
+        return false;
+    }
+
+    return true;
+}
+
 void receive_loop(int client_fd)
 {
     while (true)
     {
-        char buffer[1024];
+        string message;
 
-        memset(buffer, 0, sizeof(buffer));
+        bool success = recv_message(client_fd, message);
 
-        ssize_t bytes_received = recv(client_fd, buffer, sizeof(buffer), 0);
-
-        if (bytes_received == -1)
+        if (!success)
         {
             {
-                //this mutex loxk is for cout things 
+                // this mutex loxk is for cout things
                 lock_guard<mutex> lock(cout_mutex);
-                cout << "Receive failed: " << strerror(errno) << endl;
-            }
 
-            exit(0);
-        }
-
-        if (bytes_received == 0)
-        {
-            {
-                lock_guard<mutex> lock(cout_mutex);
-                cout << "Server disconnected." << endl;
+                cout << "Receive failed or server disconnected." << endl;
             }
 
             exit(0);
@@ -47,7 +158,7 @@ void receive_loop(int client_fd)
             lock_guard<mutex> lock(cout_mutex);
 
             cout << "Server replied: ";
-            cout.write(buffer, bytes_received);
+            cout << message;
             cout << endl;
         }
     }
@@ -124,19 +235,22 @@ int main()
             break;
         }
 
-        ssize_t bytes_sent = send(client_fd, line.c_str(), line.length(), 0);
+        bool success = send_message(client_fd, line);
 
-        if (bytes_sent == -1)
+        if (!success)
         {
             lock_guard<mutex> lock(cout_mutex);
-            cout << "Send failed: " << strerror(errno) << endl;
+
+            cout << "Send failed." << endl;
+
             close(client_fd);
             return 1;
         }
 
         {
             lock_guard<mutex> lock(cout_mutex);
-            cout << "Sent " << bytes_sent << " bytes" << endl;
+
+            cout << "Message sent successfully." << endl;
         }
     }
 

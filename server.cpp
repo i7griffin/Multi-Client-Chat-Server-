@@ -18,8 +18,11 @@ mutex cout_mutex;
 mutex clients_mutex;
 
 vector<int> client_fds;
-
+/*this global value is there to restrict the users in the server ,
+to chat within the given message limit*/
 const size_t MAX_MESSAGE_SIZE = 1024;
+
+
 bool recv_exact(int fd, char *buffer, size_t num_bytes) ;
 bool send_message(int fd, const string &message);
 bool recv_message(int fd, string &out_message);
@@ -85,6 +88,7 @@ bool recv_message(int fd, string &out_message)
         return false;
     }
 
+    //ntohl means network to host length address
     uint32_t message_length = ntohl(network_length);
 
     if (message_length > MAX_MESSAGE_SIZE)
