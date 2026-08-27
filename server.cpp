@@ -22,8 +22,7 @@ vector<int> client_fds;
 to chat within the given message limit*/
 const size_t MAX_MESSAGE_SIZE = 1024;
 
-
-bool recv_exact(int fd, char *buffer, size_t num_bytes) ;
+bool recv_exact(int fd, char *buffer, size_t num_bytes);
 bool send_message(int fd, const string &message);
 bool recv_message(int fd, string &out_message);
 
@@ -81,14 +80,14 @@ bool recv_message(int fd, string &out_message)
 {
     uint32_t network_length;
 
-    bool success = recv_exact( fd, reinterpret_cast<char *>(&network_length), sizeof(network_length));
+    bool success = recv_exact(fd, reinterpret_cast<char *>(&network_length), sizeof(network_length));
 
     if (!success)
     {
         return false;
     }
 
-    //ntohl means network to host length address
+    // ntohl means network to host length address
     uint32_t message_length = ntohl(network_length);
 
     if (message_length > MAX_MESSAGE_SIZE)
@@ -103,7 +102,7 @@ bool recv_message(int fd, string &out_message)
         return true;
     }
 
-    success = recv_exact( fd, out_message.data(), message_length);
+    success = recv_exact(fd, out_message.data(), message_length);
 
     if (!success)
     {

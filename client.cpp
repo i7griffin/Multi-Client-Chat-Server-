@@ -20,7 +20,11 @@ bool recv_exact(int fd, char *buffer, size_t num_bytes)
 
     while (bytes_received < num_bytes)
     {
-        ssize_t result = recv(fd, buffer + bytes_received, num_bytes - bytes_received, 0);
+        ssize_t result = recv(
+            fd,
+            buffer + bytes_received,
+            num_bytes - bytes_received,
+            0);
 
         if (result == 0)
         {
@@ -33,6 +37,34 @@ bool recv_exact(int fd, char *buffer, size_t num_bytes)
         }
 
         bytes_received += result;
+    }
+
+    return true;
+}
+
+bool send_exact(int fd, const char *buffer, size_t num_bytes)
+{
+    size_t bytes_sent = 0;
+
+    while (bytes_sent < num_bytes)
+    {
+        ssize_t result = send(
+            fd,
+            buffer + bytes_sent,
+            num_bytes - bytes_sent,
+            0);
+
+        if (result == -1)
+        {
+            return false;
+        }
+
+        if (result == 0)
+        {
+            return false;
+        }
+
+        bytes_sent += result;
     }
 
     return true;
@@ -52,18 +84,9 @@ bool send_message(int fd, const string &message)
     standard network byte order is big endian */
     uint32_t network_length = htonl(message_length);
 
-    ssize_t bytes_sent = send(
-        fd,
-        &network_length,
-        sizeof(network_length),
-        0);
+    bool success = send_exact(fd, reinterpret_cast<const char *>(&network_length), sizeof(network_length));
 
-    if (bytes_sent == -1)
-    {
-        return false;
-    }
-
-    if (bytes_sent != sizeof(network_length))
+    if (!success)
     {
         return false;
     }
@@ -73,18 +96,9 @@ bool send_message(int fd, const string &message)
         return true;
     }
 
-    bytes_sent = send(
-        fd,
-        message.data(),
-        message_length,
-        0);
+    success = send_exact(fd, message.data(), message_length);
 
-    if (bytes_sent == -1)
-    {
-        return false;
-    }
-
-    if (bytes_sent != message_length)
+    if (!success)
     {
         return false;
     }
