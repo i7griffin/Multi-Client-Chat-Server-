@@ -10,6 +10,10 @@
 #include <vector>
 #include <csignal>
 #include <atomic>
+#include <chrono>
+#include <ctime>
+#include <iomanip>
+#include <sstream>
 
 using namespace std;
 
@@ -33,10 +37,76 @@ vector<int> client_fds;
 to chat within the given message limit*/
 const size_t MAX_MESSAGE_SIZE = 1024;
 
+// Log levels, ordered roughly by how much attention they deserve.
+// INFO      - normal, expected lifecycle events (connect, disconnect, startup)
+// WARN      - something failed but the server keeps running fine (a broadcast send failed)
+// ERROR     - a syscall failed in a way that affects server operation (bind/listen/accept failed)
+// SECURITY  - a client did something that looks like probing/attacking the protocol
+//             (claiming an oversized message length), as opposed to just disconnecting)
+enum class LogLevel
+{
+    INFO,
+    WARN,
+    ERROR,
+    SECURITY
+};
+
+string level_to_string(LogLevel level)
+{
+    switch (level)
+    {
+        case LogLevel::INFO:
+            return "INFO";
+        case LogLevel::WARN:
+            return "WARN";
+        case LogLevel::ERROR:
+            return "ERROR";
+        case LogLevel::SECURITY:
+            return "SECURITY";
+    }
+
+    return "UNKNOWN";
+}
+
+// Builds a "[YYYY-MM-DD HH:MM:SS] [LEVEL] message" line and prints it under
+void log(LogLevel level, const string &message)
+{
+    auto now = chrono::system_clock::now();
+    time_t now_time_t = chrono::system_clock::to_time_t(now);
+
+    // localtime() is not thread-safe on its own (it can return a pointer to
+    // shared static storage), so we use localtime_r, which fills a
+    // caller-provided struct instead.
+
+
+    /*struct tm
+{
+    int tm_sec;    // seconds
+    int tm_min;    // minutes
+    int tm_hour;   // hours
+    int tm_mday;   // day of month
+    int tm_mon;    // month
+    int tm_year;   // year
+};
+*/
+    tm local_tm{};
+    localtime_r(&now_time_t, &local_tm);
+
+    //ostringstream is a tool for constructing strings using << instead of repeatedly using string concatenation.
+    ostringstream timestamp_stream;
+    timestamp_stream << put_time(&local_tm, "%Y-%m-%d %H:%M:%S");
+
+    lock_guard<mutex> lock(cout_mutex);
+    // cout_mutex, so every log line (from any thread) is atomic and consistent 
+    cout << "[" << timestamp_stream.str() << "] "
+         << "[" << level_to_string(level) << "] "
+         << message << endl;
+}
+
 bool recv_exact(int fd, char *buffer, size_t num_bytes);
 bool send_exact(int fd, const char *buffer, size_t num_bytes);
 bool send_message(int fd, const string &message);
-bool recv_message(int fd, string &out_message);
+bool recv_message(int fd, string &out_message, bool *was_oversized = nullptr);
 
 bool send_exact(int fd, const char *buffer, size_t num_bytes)
 {
@@ -102,8 +172,16 @@ bool send_message(int fd, const string &message)
     return true;
 }
 
-bool recv_message(int fd, string &out_message)
+// was_oversized lets the caller tell "client claimed a length bigger than
+// MAX_MESSAGE_SIZE" apart from "ordinary disconnect or read error". If the
+// caller doesn't care (passes nullptr), behavior is unchanged from before.
+bool recv_message(int fd, string &out_message, bool *was_oversized)
 {
+    if (was_oversized != nullptr)
+    {
+        *was_oversized = false;
+    }
+
     //netwrok length is of standard length 4 bytes we are fixing a standard message fixed length for sending message across the server 
 
     //for recv exact function we will pass network_length as parameter
@@ -121,6 +199,11 @@ bool recv_message(int fd, string &out_message)
 
     if (message_length > MAX_MESSAGE_SIZE)
     {
+        if (was_oversized != nullptr)
+        {
+            *was_oversized = true;
+        }
+
         return false;
     }
 
@@ -174,23 +257,40 @@ void handle_client(int client_fd)
         // now using recv_message() instead of raw recv() so the length-prefixed
         // protocol is actually respected here, not just in send_message/recv_message themselves
         string message;
+        bool was_oversized = false;
 
-        bool ok = recv_message(client_fd, message);
+        bool ok = recv_message(client_fd, message, &was_oversized);
 
         if (!ok)
         {
-            lock_guard<mutex> lock(cout_mutex);
-            /* RAII stands for Resource Acquisition Is Initialization
-            lock gaurd is a RAII object which handles the resource lifetime over
-            objects' lifetime destroys the resource after it goes out of scope
-            no need to manually unlock after the critical part of the code */
-            cout << "Client disconnected or framing error." << endl;
+            // Distinguish an oversized-length claim (a protocol violation that
+            // looks like probing/attacking the server) from an ordinary
+            // disconnect or read error, which is routine and expected .
+
+
+            /*the disconnection of the client from the server is handles properly*/
+            if (was_oversized)
+            {
+                ostringstream oss;
+                oss << "Client fd " << client_fd
+                    << " claimed an oversized message length (> "
+                    << MAX_MESSAGE_SIZE << " bytes). Dropping connection.";
+                log(LogLevel::SECURITY, oss.str());
+            }
+            else
+            {
+                ostringstream oss;
+                oss << "Client fd " << client_fd << " disconnected or framing error.";
+                log(LogLevel::INFO, oss.str());
+            }
+
             break;
         }
 
         {
-            lock_guard<mutex> lock(cout_mutex);
-            cout << "Received: " << message << endl;
+            ostringstream oss;
+            oss << "Received: " << message;
+            log(LogLevel::INFO, oss.str());
         }
 
         bool send_failed = false;
@@ -219,9 +319,9 @@ void handle_client(int client_fd)
 
         if (send_failed)
         {
-            lock_guard<mutex> lock(cout_mutex);
-
-            cout << "send_message failed for client " << failed_fd << endl;
+            ostringstream oss;
+            oss << "send_message failed for client " << failed_fd;
+            log(LogLevel::WARN, oss.str());
         }
     }
 
@@ -247,13 +347,18 @@ int main()
 
     if (server_fd == -1)
     {
-        cout << "Error: " << strerror(errno) << endl;
+        ostringstream oss;
+        oss << "Error: " << strerror(errno);
+        log(LogLevel::ERROR, oss.str());
         return 1;
     }
 
-    { 
-        cout << "Socket created successfully!" << endl;
-        cout << "File descriptor: " << server_fd << endl;
+    {
+        log(LogLevel::INFO, "Socket created successfully!");
+
+        ostringstream oss;
+        oss << "File descriptor: " << server_fd;
+        log(LogLevel::INFO, oss.str());
     }
 
     // this is the structure for server address
@@ -281,7 +386,9 @@ int main()
     // and the function running in that thread can read or set that threads content
     if (result == -1)
     {
-        cout << "Bind failed: " << strerror(errno) << endl;
+        ostringstream oss;
+        oss << "Bind failed: " << strerror(errno);
+        log(LogLevel::ERROR, oss.str());
         close(server_fd);
         return 1;
     }
@@ -297,13 +404,15 @@ int main()
 
     if (result == -1)
     {
-        cout << "Listen failed: " << strerror(errno) << endl;
+        ostringstream oss;
+        oss << "Listen failed: " << strerror(errno);
+        log(LogLevel::ERROR, oss.str());
         close(server_fd);
         return 1;
     }
 
     {
-        cout << "The server is listening" << endl;
+        log(LogLevel::INFO, "The server is listening");
     }
 
     struct sigaction sa;
@@ -336,15 +445,18 @@ int main()
                 continue;
             }
 
-            lock_guard<mutex> lock(cout_mutex);
-            cout << "Accept failed: " << strerror(errno) << endl;
+            ostringstream oss;
+            oss << "Accept failed: " << strerror(errno);
+            log(LogLevel::ERROR, oss.str());
             continue;
         }
 
         {
-            lock_guard<mutex> lock(cout_mutex);
-            cout << "Client connected!" << endl;
-            cout << "Client file descriptor: " << client_fd << endl;
+            log(LogLevel::INFO, "Client connected!");
+
+            ostringstream oss;
+            oss << "Client file descriptor: " << client_fd;
+            log(LogLevel::INFO, oss.str());
         }
 
         {
@@ -363,10 +475,9 @@ int main()
         client_thread.detach();
     }
 
-    // shutdown_flag became true - clean up before exiting
+    // shutdown_flag became true so we will clean up before exiting
     {
-        lock_guard<mutex> lock(cout_mutex);
-        cout << "Shutdown signal received. Closing all client connections..." << endl;
+        log(LogLevel::INFO, "Shutdown signal received. Closing all client connections...");
     }
 
     {
@@ -380,8 +491,7 @@ int main()
     close(server_fd);
 
     {
-        lock_guard<mutex> lock(cout_mutex);
-        cout << "Server shut down gracefully." << endl;
+        log(LogLevel::INFO, "Server shut down gracefully.");
     }
 
     return 0;
