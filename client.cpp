@@ -1,3 +1,4 @@
+
 #include <iostream>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -20,11 +21,7 @@ bool recv_exact(int fd, char *buffer, size_t num_bytes)
 
     while (bytes_received < num_bytes)
     {
-        ssize_t result = recv(
-            fd,
-            buffer + bytes_received,
-            num_bytes - bytes_received,
-            0);
+        ssize_t result = recv(fd, buffer + bytes_received, num_bytes - bytes_received, 0);
 
         if (result == 0)
         {

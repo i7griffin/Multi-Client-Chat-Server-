@@ -23,8 +23,37 @@ to chat within the given message limit*/
 const size_t MAX_MESSAGE_SIZE = 1024;
 
 bool recv_exact(int fd, char *buffer, size_t num_bytes);
+bool send_exact(int fd, const char *buffer, size_t num_bytes);
 bool send_message(int fd, const string &message);
 bool recv_message(int fd, string &out_message);
+
+bool send_exact(int fd, const char *buffer, size_t num_bytes)
+{
+    size_t bytes_sent = 0;
+
+    while (bytes_sent < num_bytes)
+    {
+        ssize_t result = send(
+            fd,
+            buffer + bytes_sent,
+            num_bytes - bytes_sent,
+            0);
+
+        if (result == -1)
+        {
+            return false;
+        }
+
+        if (result == 0)
+        {
+            return false;
+        }
+
+        bytes_sent += result;
+    }
+
+    return true;
+}
 
 bool send_message(int fd, const string &message)
 {
@@ -44,14 +73,9 @@ bool send_message(int fd, const string &message)
     htonl() converts the 32-bit value to network byte order.*/
     uint32_t network_length = htonl(message_length);
 
-    ssize_t bytes_sent = send(fd, &network_length, sizeof(network_length), 0);
+    bool success = send_exact(fd, reinterpret_cast<const char *>(&network_length), sizeof(network_length));
 
-    if (bytes_sent == -1)
-    {
-        return false;
-    }
-
-    if (bytes_sent != sizeof(network_length))
+    if (!success)
     {
         return false;
     }
@@ -61,14 +85,9 @@ bool send_message(int fd, const string &message)
         return true;
     }
 
-    bytes_sent = send(fd, message.data(), message_length, 0);
+    success = send_exact(fd, message.data(), message_length);
 
-    if (bytes_sent == -1)
-    {
-        return false;
-    }
-
-    if (bytes_sent != message_length)
+    if (!success)
     {
         return false;
     }
@@ -145,41 +164,31 @@ void handle_client(int client_fd)
 {
     while (true)
     {
-        char message[1024];
+        // now using recv_message() instead of raw recv() so the length-prefixed
+        // protocol is actually respected here, not just in send_message/recv_message themselves
+        string message;
 
-        memset(message, 0, sizeof(message));
+        bool ok = recv_message(client_fd, message);
 
-        ssize_t bytes_received = recv(client_fd, message, sizeof(message), 0);
-
-        if (bytes_received == -1)
+        if (!ok)
         {
             lock_guard<mutex> lock(cout_mutex);
             /*RAII stands for Resource Acquisition Is Initialization
             lock gaurd is a RAII object which handles the resource lifetime over
             objects' lifetime destroys the resource after it goes out of scope
             no need to manually unlock after the critical part of the code*/
-            cout << "Receive failed: " << strerror(errno) << endl;
-            break;
-        }
-
-        if (bytes_received == 0)
-        {
-            lock_guard<mutex> lock(cout_mutex);
-            cout << "Client disconnected." << endl;
+            cout << "Client disconnected or framing error." << endl;
             break;
         }
 
         {
             lock_guard<mutex> lock(cout_mutex);
 
-            cout << "Received: ";
-            cout.write(message, bytes_received);
-            cout << endl;
+            cout << "Received: " << message << endl;
         }
 
         bool send_failed = false;
         int failed_fd = -1;
-        int send_error = 0;
 
         {
             lock_guard<mutex> lock(clients_mutex);
@@ -191,13 +200,13 @@ void handle_client(int client_fd)
                     continue;
                 }
 
-                ssize_t bytes_sent = send(fd, message, bytes_received, 0);
+                // now using send_message() so the broadcast is also framed correctly
+                bool sent_ok = send_message(fd, message);
 
-                if (bytes_sent == -1)
+                if (!sent_ok)
                 {
                     send_failed = true;
                     failed_fd = fd;
-                    send_error = errno;
                 }
             }
         }
@@ -206,9 +215,7 @@ void handle_client(int client_fd)
         {
             lock_guard<mutex> lock(cout_mutex);
 
-            cout << "Send failed for client "
-                 << failed_fd << ": "
-                 << strerror(send_error) << endl;
+            cout << "send_message failed for client " << failed_fd << endl;
         }
     }
 
