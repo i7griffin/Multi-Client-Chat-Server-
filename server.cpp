@@ -8,8 +8,19 @@
 #include <thread>
 #include <mutex>
 #include <vector>
+#include <csignal>
+#include <atomic>
 
 using namespace std;
+
+//atomic bool is used for shutdown is to ask the compile to check for other wayt o check the modified cvalue of he flag and not to check only in the flow of program 
+atomic<bool> shutdown_flag(false);
+
+//signal handler is what we use to change the flag value outside of the program execution flow 
+void signal_handler(int signum)
+{
+    shutdown_flag = true;
+}
 
 /*two different locks for the clients array and separate lock for cout .the locks for the clients array
 for the fd to removed or added only by one thread and prevents other thread trying to access it at the same time .*/
@@ -33,11 +44,7 @@ bool send_exact(int fd, const char *buffer, size_t num_bytes)
 
     while (bytes_sent < num_bytes)
     {
-        ssize_t result = send(
-            fd,
-            buffer + bytes_sent,
-            num_bytes - bytes_sent,
-            0);
+        ssize_t result = send(fd, buffer + bytes_sent, num_bytes - bytes_sent, 0);
 
         if (result == -1)
         {
@@ -97,6 +104,9 @@ bool send_message(int fd, const string &message)
 
 bool recv_message(int fd, string &out_message)
 {
+    //netwrok length is of standard length 4 bytes we are fixing a standard message fixed length for sending message across the server 
+
+    //for recv exact function we will pass network_length as parameter
     uint32_t network_length;
 
     bool success = recv_exact(fd, reinterpret_cast<char *>(&network_length), sizeof(network_length));
@@ -138,11 +148,8 @@ bool recv_exact(int fd, char *buffer, size_t num_bytes)
 
     while (bytes_received < num_bytes)
     {
-        ssize_t result = recv(
-            fd,
-            buffer + bytes_received,
-            num_bytes - bytes_received,
-            0);
+        /*buffer + bytes_received === will set offset from were the result should be read and stores*/
+        ssize_t result = recv(fd,buffer + bytes_received,num_bytes - bytes_received,0);
 
         if (result == 0)
         {
@@ -173,17 +180,16 @@ void handle_client(int client_fd)
         if (!ok)
         {
             lock_guard<mutex> lock(cout_mutex);
-            /*RAII stands for Resource Acquisition Is Initialization
+            /* RAII stands for Resource Acquisition Is Initialization
             lock gaurd is a RAII object which handles the resource lifetime over
             objects' lifetime destroys the resource after it goes out of scope
-            no need to manually unlock after the critical part of the code*/
+            no need to manually unlock after the critical part of the code */
             cout << "Client disconnected or framing error." << endl;
             break;
         }
 
         {
             lock_guard<mutex> lock(cout_mutex);
-
             cout << "Received: " << message << endl;
         }
 
@@ -241,14 +247,11 @@ int main()
 
     if (server_fd == -1)
     {
-        lock_guard<mutex> lock(cout_mutex);
         cout << "Error: " << strerror(errno) << endl;
         return 1;
     }
 
-    {
-        lock_guard<mutex> lock(cout_mutex);
-
+    { 
         cout << "Socket created successfully!" << endl;
         cout << "File descriptor: " << server_fd << endl;
     }
@@ -264,11 +267,12 @@ int main()
 
     // AF_INET is for ipv4 addresses
     server_addr.sin_family = AF_INET;
+
     // htons converts the port number to network byte order
     server_addr.sin_port = htons(8080);
 
     // socket function creates the socket and the bind funciton gives the socket a local address
-    // the bind function expects a pointer struck to serveraddr because the bing=d function must eb able to work with all
+    // the bind function expects a pointer struck to serveraddr because the bind function must be able to work with all
     // kinds of address families ,
     // so the general pointer of sockaddr is expected by the function
     int result = bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr));
@@ -277,7 +281,6 @@ int main()
     // and the function running in that thread can read or set that threads content
     if (result == -1)
     {
-        lock_guard<mutex> lock(cout_mutex);
         cout << "Bind failed: " << strerror(errno) << endl;
         close(server_fd);
         return 1;
@@ -289,22 +292,30 @@ int main()
     incoming connecctions from which the accept function works on
     i.e it is a queue of connections that have completed the TCP handshake
     */
+
     result = listen(server_fd, 5);
 
     if (result == -1)
     {
-        lock_guard<mutex> lock(cout_mutex);
         cout << "Listen failed: " << strerror(errno) << endl;
         close(server_fd);
         return 1;
     }
 
     {
-        lock_guard<mutex> lock(cout_mutex);
         cout << "The server is listening" << endl;
     }
 
-    while (true)
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = signal_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0; // deliberately NOT setting SA_RESTART, so accept() returns EINTR instead of silently retrying
+    sigaction(SIGINT, &sa, nullptr);
+
+    // loop condition now checks shutdown_flag so Ctrl+C can actually end the loop,
+    // instead of while(true) which had no way to exit gracefully
+    while (!shutdown_flag)
     {
         sockaddr_in client_addr;
         socklen_t client_addr_len = sizeof(client_addr);
@@ -316,6 +327,15 @@ int main()
 
         if (client_fd == -1)
         {
+            // EINTR means a signal (like SIGINT) interrupted accept() while it was blocking -
+            // this is not a real error, it's expected during shutdown, so don't print
+            // "Accept failed" for it. Just go back to the top of the loop, where
+            // while(!shutdown_flag) will now correctly evaluate to false and exit.
+            if (errno == EINTR)
+            {
+                continue;
+            }
+
             lock_guard<mutex> lock(cout_mutex);
             cout << "Accept failed: " << strerror(errno) << endl;
             continue;
@@ -323,7 +343,6 @@ int main()
 
         {
             lock_guard<mutex> lock(cout_mutex);
-
             cout << "Client connected!" << endl;
             cout << "Client file descriptor: " << client_fd << endl;
         }
@@ -344,7 +363,26 @@ int main()
         client_thread.detach();
     }
 
+    // shutdown_flag became true - clean up before exiting
+    {
+        lock_guard<mutex> lock(cout_mutex);
+        cout << "Shutdown signal received. Closing all client connections..." << endl;
+    }
+
+    {
+        lock_guard<mutex> lock(clients_mutex);
+        for (int fd : client_fds)
+        {
+            close(fd);
+        }
+    }
+
     close(server_fd);
+
+    {
+        lock_guard<mutex> lock(cout_mutex);
+        cout << "Server shut down gracefully." << endl;
+    }
 
     return 0;
 }
