@@ -17,10 +17,10 @@
 
 using namespace std;
 
-//atomic bool is used for shutdown is to ask the compile to check for other wayt o check the modified cvalue of he flag and not to check only in the flow of program 
+// atomic bool is used for shutdown is to ask the compile to check for other wayt o check the modified cvalue of he flag and not to check only in the flow of program
 atomic<bool> shutdown_flag(false);
 
-//signal handler is what we use to change the flag value outside of the program execution flow 
+// signal handler is what we use to change the flag value outside of the program execution flow
 void signal_handler(int signum)
 {
     shutdown_flag = true;
@@ -55,14 +55,14 @@ string level_to_string(LogLevel level)
 {
     switch (level)
     {
-        case LogLevel::INFO:
-            return "INFO";
-        case LogLevel::WARN:
-            return "WARN";
-        case LogLevel::ERROR:
-            return "ERROR";
-        case LogLevel::SECURITY:
-            return "SECURITY";
+    case LogLevel::INFO:
+        return "INFO";
+    case LogLevel::WARN:
+        return "WARN";
+    case LogLevel::ERROR:
+        return "ERROR";
+    case LogLevel::SECURITY:
+        return "SECURITY";
     }
 
     return "UNKNOWN";
@@ -78,7 +78,6 @@ void log(LogLevel level, const string &message)
     // shared static storage), so we use localtime_r, which fills a
     // caller-provided struct instead.
 
-
     /*struct tm
 {
     int tm_sec;    // seconds
@@ -92,12 +91,12 @@ void log(LogLevel level, const string &message)
     tm local_tm{};
     localtime_r(&now_time_t, &local_tm);
 
-    //ostringstream is a tool for constructing strings using << instead of repeatedly using string concatenation.
+    // ostringstream is a tool for constructing strings using << instead of repeatedly using string concatenation.
     ostringstream timestamp_stream;
     timestamp_stream << put_time(&local_tm, "%Y-%m-%d %H:%M:%S");
 
     lock_guard<mutex> lock(cout_mutex);
-    // cout_mutex, so every log line (from any thread) is atomic and consistent 
+    // cout_mutex, so every log line (from any thread) is atomic and consistent
     cout << "[" << timestamp_stream.str() << "] "
          << "[" << level_to_string(level) << "] "
          << message << endl;
@@ -118,6 +117,8 @@ bool send_exact(int fd, const char *buffer, size_t num_bytes)
 
         if (result == -1)
         {
+            if (errno == EINTR)
+                continue;
             return false;
         }
 
@@ -182,9 +183,9 @@ bool recv_message(int fd, string &out_message, bool *was_oversized)
         *was_oversized = false;
     }
 
-    //netwrok length is of standard length 4 bytes we are fixing a standard message fixed length for sending message across the server 
+    // netwrok length is of standard length 4 bytes we are fixing a standard message fixed length for sending message across the server
 
-    //for recv exact function we will pass network_length as parameter
+    // for recv exact function we will pass network_length as parameter
     uint32_t network_length;
 
     bool success = recv_exact(fd, reinterpret_cast<char *>(&network_length), sizeof(network_length));
@@ -232,7 +233,7 @@ bool recv_exact(int fd, char *buffer, size_t num_bytes)
     while (bytes_received < num_bytes)
     {
         /*buffer + bytes_received === will set offset from were the result should be read and stores*/
-        ssize_t result = recv(fd,buffer + bytes_received,num_bytes - bytes_received,0);
+        ssize_t result = recv(fd, buffer + bytes_received, num_bytes - bytes_received, 0);
 
         if (result == 0)
         {
@@ -241,6 +242,8 @@ bool recv_exact(int fd, char *buffer, size_t num_bytes)
 
         if (result == -1)
         {
+            if (errno == EINTR)
+                continue;
             return false;
         }
 
@@ -266,7 +269,6 @@ void handle_client(int client_fd)
             // Distinguish an oversized-length claim (a protocol violation that
             // looks like probing/attacking the server) from an ordinary
             // disconnect or read error, which is routine and expected .
-
 
             /*the disconnection of the client from the server is handles properly*/
             if (was_oversized)
@@ -361,6 +363,27 @@ int main()
         log(LogLevel::INFO, oss.str());
     }
 
+    // SO_REUSEADDR lets us rebind to this port immediately after a restart,
+    // instead of getting "Address already in use" while the OS holds the old
+    // socket in TIME_WAIT. opt=1 means "enable this option".
+    int opt = 1;
+
+    // SOL_SOCKET = "this option operates at the general socket level" (as
+    // opposed to a TCP-specific or IP-specific level, like IPPROTO_TCP would be)
+    int result = setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    // Unlike bind/listen/accept failing, a failed setsockopt() here doesn't
+    // break the server's ability to run right now - it can still bind and
+    // serve clients just fine on this run. It only means a *future* restart
+    // might hit the TIME_WAIT problem again. That's a WARN, not an ERROR:
+    // something failed but the server keeps running fine.
+    if (result == -1)
+    {
+        ostringstream oss;
+        oss << "setsockopt(SO_REUSEADDR) failed: " << strerror(errno);
+        log(LogLevel::WARN, oss.str());
+    }
+
     // this is the structure for server address
     struct sockaddr_in server_addr;
 
@@ -380,7 +403,7 @@ int main()
     // the bind function expects a pointer struck to serveraddr because the bind function must be able to work with all
     // kinds of address families ,
     // so the general pointer of sockaddr is expected by the function
-    int result = bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr));
+    result = bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr));
 
     // each and every thread have unique errno
     // and the function running in that thread can read or set that threads content
