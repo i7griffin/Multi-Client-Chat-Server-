@@ -14,13 +14,14 @@
 #include <ctime>
 #include <iomanip>
 #include <sstream>
+#include <map>
 
 using namespace std;
 
-// atomic bool is used for shutdown is to ask the compile to check for other wayt o check the modified cvalue of he flag and not to check only in the flow of program
+//atomic bool is used for shutdown is to ask the compile to check for other wayt o check the modified cvalue of he flag and not to check only in the flow of program 
 atomic<bool> shutdown_flag(false);
 
-// signal handler is what we use to change the flag value outside of the program execution flow
+//signal handler is what we use to change the flag value outside of the program execution flow 
 void signal_handler(int signum)
 {
     shutdown_flag = true;
@@ -33,6 +34,13 @@ mutex cout_mutex;
 mutex clients_mutex;
 
 vector<int> client_fds;
+
+// Maps a connected client's fd to the username they registered at connect
+// time. This is the same conceptual "who's connected" state as client_fds,
+// just richer, so it's protected by the same clients_mutex rather than a
+// separate lock - that avoids any risk of the two getting out of sync under
+// concurrent access.
+map<int, string> usernames;
 /*this global value is there to restrict the users in the server ,
 to chat within the given message limit*/
 const size_t MAX_MESSAGE_SIZE = 1024;
@@ -55,14 +63,14 @@ string level_to_string(LogLevel level)
 {
     switch (level)
     {
-    case LogLevel::INFO:
-        return "INFO";
-    case LogLevel::WARN:
-        return "WARN";
-    case LogLevel::ERROR:
-        return "ERROR";
-    case LogLevel::SECURITY:
-        return "SECURITY";
+        case LogLevel::INFO:
+            return "INFO";
+        case LogLevel::WARN:
+            return "WARN";
+        case LogLevel::ERROR:
+            return "ERROR";
+        case LogLevel::SECURITY:
+            return "SECURITY";
     }
 
     return "UNKNOWN";
@@ -78,6 +86,7 @@ void log(LogLevel level, const string &message)
     // shared static storage), so we use localtime_r, which fills a
     // caller-provided struct instead.
 
+
     /*struct tm
 {
     int tm_sec;    // seconds
@@ -91,21 +100,32 @@ void log(LogLevel level, const string &message)
     tm local_tm{};
     localtime_r(&now_time_t, &local_tm);
 
-    // ostringstream is a tool for constructing strings using << instead of repeatedly using string concatenation.
+    //ostringstream is a tool for constructing strings using << instead of repeatedly using string concatenation.
     ostringstream timestamp_stream;
     timestamp_stream << put_time(&local_tm, "%Y-%m-%d %H:%M:%S");
 
     lock_guard<mutex> lock(cout_mutex);
-    // cout_mutex, so every log line (from any thread) is atomic and consistent
+    // cout_mutex, so every log line (from any thread) is atomic and consistent 
     cout << "[" << timestamp_stream.str() << "] "
          << "[" << level_to_string(level) << "] "
          << message << endl;
 }
 
+// The type byte lets receivers tell "this is the one-time username handshake"
+// apart from "this is a regular chat message" without needing a second,
+// differently-shaped protocol. It's a single byte, so it has no endianness
+// to worry about (endianness only matters for multi-byte values like our
+// 4-byte length header).
+enum class MessageType : uint8_t
+{
+    USERNAME = 0,
+    CHAT = 1
+};
+
 bool recv_exact(int fd, char *buffer, size_t num_bytes);
 bool send_exact(int fd, const char *buffer, size_t num_bytes);
-bool send_message(int fd, const string &message);
-bool recv_message(int fd, string &out_message, bool *was_oversized = nullptr);
+bool send_message(int fd, MessageType type, const string &message);
+bool recv_message(int fd, MessageType &out_type, string &out_message, bool *was_oversized = nullptr);
 
 bool send_exact(int fd, const char *buffer, size_t num_bytes)
 {
@@ -117,8 +137,7 @@ bool send_exact(int fd, const char *buffer, size_t num_bytes)
 
         if (result == -1)
         {
-            if (errno == EINTR)
-                continue;
+            if (errno == EINTR) continue;   
             return false;
         }
 
@@ -133,8 +152,20 @@ bool send_exact(int fd, const char *buffer, size_t num_bytes)
     return true;
 }
 
-bool send_message(int fd, const string &message)
+bool send_message(int fd, MessageType type, const string &message)
 {
+    // Send the type byte first. It's a single uint8_t, so it goes over the
+    // wire as-is - no htonl needed, since byte order only matters for values
+    // wider than one byte.
+    uint8_t type_byte = static_cast<uint8_t>(type);
+
+    bool type_sent = send_exact(fd, reinterpret_cast<const char *>(&type_byte), sizeof(type_byte));
+
+    if (!type_sent)
+    {
+        return false;
+    }
+
     uint32_t message_length = message.length();
 
     if (message_length > MAX_MESSAGE_SIZE)
@@ -176,16 +207,29 @@ bool send_message(int fd, const string &message)
 // was_oversized lets the caller tell "client claimed a length bigger than
 // MAX_MESSAGE_SIZE" apart from "ordinary disconnect or read error". If the
 // caller doesn't care (passes nullptr), behavior is unchanged from before.
-bool recv_message(int fd, string &out_message, bool *was_oversized)
+bool recv_message(int fd, MessageType &out_type, string &out_message, bool *was_oversized)
 {
     if (was_oversized != nullptr)
     {
         *was_oversized = false;
     }
 
-    // netwrok length is of standard length 4 bytes we are fixing a standard message fixed length for sending message across the server
+    // Read the type byte first - same story as send_message(), no endianness
+    // conversion needed for a single byte.
+    uint8_t type_byte;
 
-    // for recv exact function we will pass network_length as parameter
+    bool type_ok = recv_exact(fd, reinterpret_cast<char *>(&type_byte), sizeof(type_byte));
+
+    if (!type_ok)
+    {
+        return false;
+    }
+
+    out_type = static_cast<MessageType>(type_byte);
+
+    //netwrok length is of standard length 4 bytes we are fixing a standard message fixed length for sending message across the server 
+
+    //for recv exact function we will pass network_length as parameter
     uint32_t network_length;
 
     bool success = recv_exact(fd, reinterpret_cast<char *>(&network_length), sizeof(network_length));
@@ -233,7 +277,7 @@ bool recv_exact(int fd, char *buffer, size_t num_bytes)
     while (bytes_received < num_bytes)
     {
         /*buffer + bytes_received === will set offset from were the result should be read and stores*/
-        ssize_t result = recv(fd, buffer + bytes_received, num_bytes - bytes_received, 0);
+        ssize_t result = recv(fd,buffer + bytes_received,num_bytes - bytes_received,0);
 
         if (result == 0)
         {
@@ -242,8 +286,7 @@ bool recv_exact(int fd, char *buffer, size_t num_bytes)
 
         if (result == -1)
         {
-            if (errno == EINTR)
-                continue;
+            if (errno == EINTR) continue;   
             return false;
         }
 
@@ -255,20 +298,58 @@ bool recv_exact(int fd, char *buffer, size_t num_bytes)
 
 void handle_client(int client_fd)
 {
+    // Before entering the normal chat loop, this client gets exactly one
+    // chance to register a username. This runs once, outside the loop,
+    // because it's a connection-setup step, not a recurring chat message.
+    {
+        MessageType handshake_type;
+        string username;
+        bool was_oversized = false;
+
+        bool handshake_ok = recv_message(client_fd, handshake_type, username, &was_oversized);
+
+        // Anything going wrong here - disconnect, oversized claim, or the
+        // client sending CHAT instead of USERNAME first - means this
+        // connection never got set up correctly, so we treat it the same
+        // way as any other setup failure: log it and close, without ever
+        // reaching the main loop or client_fds.
+        if (!handshake_ok || handshake_type != MessageType::USERNAME)
+        {
+            ostringstream oss;
+            oss << "Client fd " << client_fd << " failed the username handshake"
+                << (was_oversized ? " (oversized message length)" : (!handshake_ok ? " (disconnected)" : " (wrong message type)"))
+                << ". Closing connection.";
+            log(LogLevel::INFO, oss.str());
+            close(client_fd);
+            return;
+        }
+
+        {
+            lock_guard<mutex> lock(clients_mutex);
+            usernames[client_fd] = username;
+        }
+
+        ostringstream oss;
+        oss << "Client fd " << client_fd << " registered as \"" << username << "\".";
+        log(LogLevel::INFO, oss.str());
+    }
+
     while (true)
     {
         // now using recv_message() instead of raw recv() so the length-prefixed
         // protocol is actually respected here, not just in send_message/recv_message themselves
+        MessageType type;
         string message;
         bool was_oversized = false;
 
-        bool ok = recv_message(client_fd, message, &was_oversized);
+        bool ok = recv_message(client_fd, type, message, &was_oversized);
 
         if (!ok)
         {
             // Distinguish an oversized-length claim (a protocol violation that
             // looks like probing/attacking the server) from an ordinary
             // disconnect or read error, which is routine and expected .
+
 
             /*the disconnection of the client from the server is handles properly*/
             if (was_oversized)
@@ -301,6 +382,10 @@ void handle_client(int client_fd)
         {
             lock_guard<mutex> lock(clients_mutex);
 
+            // Look up the sender's username under the same lock that guards
+            // client_fds, so it can't be erased out from under us mid-broadcast.
+            string formatted_message = usernames[client_fd] + ": " + message;
+
             for (int fd : client_fds)
             {
                 if (fd == client_fd)
@@ -309,7 +394,7 @@ void handle_client(int client_fd)
                 }
 
                 // now using send_message() so the broadcast is also framed correctly
-                bool sent_ok = send_message(fd, message);
+                bool sent_ok = send_message(fd, MessageType::CHAT, formatted_message);
 
                 if (!sent_ok)
                 {
@@ -338,6 +423,10 @@ void handle_client(int client_fd)
                 break;
             }
         }
+
+        // Same "who's connected" state as client_fds, so it gets cleaned up
+        // here too, under the same lock.
+        usernames.erase(client_fd);
     }
 
     close(client_fd);

@@ -1,4 +1,3 @@
-
 #include <iostream>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -15,13 +14,22 @@ mutex cout_mutex;
 
 const size_t MAX_MESSAGE_SIZE = 1024;
 
+// Must match the server's enum exactly - same values, same meaning - since
+// this byte is what tells the other side "this is the one-time username
+// handshake" vs "this is a regular chat message".
+enum class MessageType : uint8_t
+{
+    USERNAME = 0,
+    CHAT = 1
+};
+
 bool recv_exact(int fd, char *buffer, size_t num_bytes)
 {
     size_t bytes_received = 0;
 
     while (bytes_received < num_bytes)
     {
-        ssize_t result = recv(fd, buffer + bytes_received, num_bytes - bytes_received, 0);
+        ssize_t result = recv(fd,buffer + bytes_received,num_bytes - bytes_received,0);
 
         if (result == 0)
         {
@@ -67,8 +75,19 @@ bool send_exact(int fd, const char *buffer, size_t num_bytes)
     return true;
 }
 
-bool send_message(int fd, const string &message)
+bool send_message(int fd, MessageType type, const string &message)
 {
+    // Send the type byte first. One byte, so no htonl needed - endianness
+    // only matters for multi-byte values like the length header below.
+    uint8_t type_byte = static_cast<uint8_t>(type);
+
+    bool type_sent = send_exact(fd, reinterpret_cast<const char *>(&type_byte), sizeof(type_byte));
+
+    if (!type_sent)
+    {
+        return false;
+    }
+
     uint32_t message_length = message.length();
 
     if (message_length > MAX_MESSAGE_SIZE)
@@ -103,8 +122,21 @@ bool send_message(int fd, const string &message)
     return true;
 }
 
-bool recv_message(int fd, string &out_message)
+bool recv_message(int fd, MessageType &out_type, string &out_message)
 {
+    // Read the type byte first - same story as send_message(), no
+    // endianness conversion needed for a single byte.
+    uint8_t type_byte;
+
+    bool type_ok = recv_exact(fd, reinterpret_cast<char *>(&type_byte), sizeof(type_byte));
+
+    if (!type_ok)
+    {
+        return false;
+    }
+
+    out_type = static_cast<MessageType>(type_byte);
+
     uint32_t network_length;
 
     bool success = recv_exact(
@@ -149,9 +181,14 @@ void receive_loop(int client_fd)
 {
     while (true)
     {
+        // This client only ever expects CHAT messages back from the server
+        // (the server only broadcasts chat, never sends USERNAME messages),
+        // so the type isn't used for anything here - it still has to be
+        // passed, since recv_message() needs somewhere to put it.
+        MessageType type;
         string message;
 
-        bool success = recv_message(client_fd, message);
+        bool success = recv_message(client_fd, type, message);
 
         if (!success)
         {
@@ -231,6 +268,36 @@ int main()
 
     cout << "Connected to server!" << endl;
 
+    // One-time handshake: register a username with the server before doing
+    // anything else. This has to happen before the receive thread starts
+    // and before any chat messages go out, since the server expects exactly
+    // one USERNAME message first, on this same connection.
+    string username;
+
+    cout << "Enter username: ";
+
+    // If stdin hits EOF right here (e.g. piped input with nothing left),
+    // getline() fails and leaves username untouched/empty - checking the
+    // return value lets us bail out cleanly instead of trying to proceed
+    // with a connection that never got a real handshake.
+    if (!getline(cin, username))
+    {
+        cout << "No username entered; exiting." << endl;
+        close(client_fd);
+        return 1;
+    }
+
+    {
+        bool username_sent = send_message(client_fd, MessageType::USERNAME, username);
+
+        if (!username_sent)
+        {
+            cout << "Failed to send username." << endl;
+            close(client_fd);
+            return 1;
+        }
+    }
+
     thread recv_thread(receive_loop, client_fd);
     recv_thread.detach();
 
@@ -239,14 +306,22 @@ int main()
     {
         string line;
 
-        getline(cin, line);
+        // Same fix as above: if getline() fails (stdin closed/EOF) without
+        // the user ever typing "quit", break out instead of spinning forever
+        // sending empty messages - getline() converts to false on failure,
+        // which is exactly the case a bare "getline(cin, line);" call with
+        // no check was silently ignoring before.
+        if (!getline(cin, line))
+        {
+            break;
+        }
 
         if (line == "quit")
         {
             break;
         }
 
-        bool success = send_message(client_fd, line);
+        bool success = send_message(client_fd, MessageType::CHAT, line);
 
         if (!success)
         {
