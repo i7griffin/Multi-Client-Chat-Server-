@@ -1,0 +1,20 @@
+Thread-per-client (what I built)	
+It is simple to write, natural shared-memory broadcasting, good for small-to-moderate scale
+Doesn't scale — real memory/thread cost per client, breaks down around hundreds-to-thousands of connections
+
+
+
+Process-per-client	
+Strong isolation (a crash in one client can't corrupt another)	
+Broadcasting requires extra IPC machinery — the exact feature this server centers on becomes hard
+
+
+Thread pool	
+Bounds resource usage, predictable	
+Idle clients can starve capacity from active ones, since a worker stays occupied by a client even when that client is doing nothing
+
+
+
+Event-driven (epoll)	
+Scales to tens of thousands of connections on one thread, since idle connections cost almost nothing
+More complex code — no natural "blocking wait for this one client" mental model; requires rethinking the whole I/O structure
