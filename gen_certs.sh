@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Generates a private CA + a server certificate for local development.
 # ECDSA P-256 keys: much faster handshakes than RSA-2048/4096 at equal security.
-# Usage: ./gen_certs.sh [output_dir]     (default: certs)
+# Usage (from repo root): ./certs/gen_certs.sh [output_dir]   (default: certs)
 set -euo pipefail
 
 DIR="${1:-certs}"
@@ -29,4 +29,4 @@ openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
 chmod 600 ca.key server.key
 rm -f server.csr server.ext ca.srl
 echo "Done. Server uses: $DIR/server.crt + $DIR/server.key   Client trusts: $DIR/ca.crt"
-echo "NEVER commit *.key files to GitHub (add certs/*.key to .gitignore)."
+echo "NEVER commit *.key files (they are listed in .gitignore). Re-run this script on each machine."
