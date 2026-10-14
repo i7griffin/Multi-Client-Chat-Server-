@@ -12,6 +12,8 @@
 #include <cerrno>
 #include <fcntl.h>
 #include <cstring>
+#include <cctype>
+#include <strings.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
@@ -35,7 +37,18 @@ using namespace std;
 
 constexpr int PORT = 8080;
 constexpr int MAX_EVENTS = 128;
-const size_t MAX_MESSAGE_SIZE = 1024;
+const size_t MAX_MESSAGE_SIZE = 1024;   // max payload of ANY frame on the wire
+
+// [FIX 1] A broadcast frame is  username + ": " + chat text  and that frame must
+// itself fit in MAX_MESSAGE_SIZE, or receivers reject it. The three constants
+// below are therefore linked: 32 + 2 + 990 == 1024.
+constexpr size_t MAX_USERNAME_SIZE = 32;
+constexpr size_t MAX_CHAT_SIZE = MAX_MESSAGE_SIZE - MAX_USERNAME_SIZE - 2;
+
+// [FIX 2] Most plaintext we process from ONE client per turn of the event loop,
+// so one fast sender cannot fill everybody's output buffers before they get a
+// chance to flush.
+constexpr size_t MAX_READ_PER_EVENT = 64 * 1024;
 
 // One TLS record carries at most 16 KB of plaintext, so we never hand
 // SSL_write() more than that at once.
@@ -121,6 +134,11 @@ struct Client {
 
     bool registered = false;
     bool alive = true;
+
+    // [FIX 2] true when we stopped reading early (budget used up) and still owe
+    // this client another read, even if epoll stays silent (OpenSSL may be
+    // holding decrypted bytes that the socket no longer reports).
+    bool read_pending = false;
 };
 
 map<int, Client> clients;
@@ -129,6 +147,9 @@ SSL_CTX* g_ssl_ctx = nullptr;
 // fds of OTHER clients that broadcast_message() decided to drop (e.g. slow consumers).
 // They are removed after the current batch of epoll events, never mid-iteration.
 vector<int> dead_fds;
+
+// [FIX 2] clients that hit their read budget and need another turn.
+vector<int> read_pending_fds;
 
 // ---------------------------------------------------------------- epoll helpers
 bool update_epoll_interest(int epoll_fd, Client& c) {
@@ -242,7 +263,8 @@ void broadcast_message(int epoll_fd, int sender_fd, const string& message) {
     string formatted = sender_it->second.username + ": " + message;
 
     for (auto& [fd, client] : clients) {
-        if (fd == sender_fd || !client.registered) continue;
+        // [FIX 3] never queue data for a client we already decided to drop
+        if (fd == sender_fd || !client.registered || !client.alive) continue;
 
         if (!queue_message(client, MessageType::CHAT, formatted)) {
             log(LogLevel::WARN, "fd " + to_string(fd) + " is not draining its socket; dropping.");
@@ -255,6 +277,31 @@ void broadcast_message(int epoll_fd, int sender_fd, const string& message) {
             dead_fds.push_back(fd);
         }
     }
+}
+
+// [FIX 4] Usernames end up in logs, in every other client's terminal, and in the
+// "name: text" format, so keep them boring: 1-32 chars of [A-Za-z0-9_.-].
+bool is_valid_username(const string& s) {
+    if (s.empty() || s.size() > MAX_USERNAME_SIZE) return false;
+    for (unsigned char ch : s) {
+        if (!(isalnum(ch) || ch == '_' || ch == '-' || ch == '.')) return false;
+    }
+    return true;
+}
+
+// Case-insensitive, so "Alice" cannot impersonate "alice".
+bool username_taken(const string& name, int except_fd) {
+    for (auto& [fd, c] : clients) {
+        if (fd == except_fd || !c.registered) continue;
+        if (strcasecmp(c.username.c_str(), name.c_str()) == 0) return true;
+    }
+    return false;
+}
+
+// Best effort: tell the client WHY, then the caller drops the connection.
+void reject(Client& c, const string& reason) {
+    queue_message(c, MessageType::CHAT, "Server: " + reason);
+    flush_output(c);
 }
 
 bool parse_messages(int epoll_fd, Client& client) {
@@ -297,8 +344,17 @@ bool parse_messages(int epoll_fd, Client& client) {
                 ok = false;
                 break;
             }
-            if (message.empty()) {
-                log(LogLevel::WARN, "Client sent an empty username. Closing connection.");
+            if (!is_valid_username(message)) {
+                // Do NOT log the raw name: it is attacker-controlled.
+                log(LogLevel::WARN, "fd " + to_string(client.fd) + " sent an invalid username. Closing connection.");
+                reject(client, "invalid username (1-" + to_string(MAX_USERNAME_SIZE) +
+                               " characters: letters, digits, _ - .)");
+                ok = false;
+                break;
+            }
+            if (username_taken(message, client.fd)) {
+                log(LogLevel::WARN, "fd " + to_string(client.fd) + " tried a username that is already taken.");
+                reject(client, "username already taken");
                 ok = false;
                 break;
             }
@@ -311,7 +367,16 @@ bool parse_messages(int epoll_fd, Client& client) {
                 ok = false;
                 break;
             }
-            log(LogLevel::INFO, "Received: " + message);
+            if (message.size() > MAX_CHAT_SIZE) {
+                log(LogLevel::WARN, "fd " + to_string(client.fd) + " sent a message longer than " +
+                                    to_string(MAX_CHAT_SIZE) + " bytes. Closing connection.");
+                reject(client, "message too long (max " + to_string(MAX_CHAT_SIZE) + " bytes)");
+                ok = false;
+                break;
+            }
+            // [FIX 5] log metadata only; the server log must not become a
+            // plaintext copy of everyone's conversations.
+            log(LogLevel::INFO, "Message from \"" + client.username + "\" (" + to_string(message.size()) + " bytes)");
             broadcast_message(epoll_fd, client.fd, message);
         }
 
@@ -351,14 +416,26 @@ bool do_handshake(Client& c) {
 
 bool handle_read(int epoll_fd, Client& c) {
     char buffer[16 * 1024];
+    size_t budget = MAX_READ_PER_EVENT;   // [FIX 2]
+    c.read_pending = false;
 
     // Level-triggered epoll only knows about the SOCKET, not about decrypted
     // bytes OpenSSL may already hold internally. So we must keep calling
     // SSL_read() until it reports WANT_READ, otherwise data could sit unseen.
     while (true) {
+        // [FIX 2] Used up our share for this turn: yield so the recipients get
+        // flushed. We MUST remember to come back ourselves, because OpenSSL may
+        // already hold decrypted bytes and epoll would never mention them again.
+        if (budget == 0) {
+            c.read_pending = true;
+            read_pending_fds.push_back(c.fd);
+            return true;
+        }
+
         ERR_clear_error();
         int r = SSL_read(c.ssl, buffer, sizeof(buffer));
         if (r > 0) {
+            budget -= min(budget, static_cast<size_t>(r));
             c.input_buffer.insert(c.input_buffer.end(), buffer, buffer + r);
             if (!parse_messages(epoll_fd, c)) return false;
             if (!c.alive) return false;
@@ -486,8 +563,11 @@ SSL_CTX* create_ssl_context(const char* cert_file, const char* key_file) {
     SSL_CTX_set_options(ctx,
         SSL_OP_NO_COMPRESSION |            // CRIME-style attacks
         SSL_OP_NO_RENEGOTIATION |
-        SSL_OP_CIPHER_SERVER_PREFERENCE |
-        SSL_OP_IGNORE_UNEXPECTED_EOF);     // peer closing without close_notify = normal disconnect
+        SSL_OP_CIPHER_SERVER_PREFERENCE);
+#ifdef SSL_OP_IGNORE_UNEXPECTED_EOF       // [FIX 6] only exists in OpenSSL >= 3.0
+    // peer closing without close_notify = normal disconnect
+    SSL_CTX_set_options(ctx, SSL_OP_IGNORE_UNEXPECTED_EOF);
+#endif
 
     SSL_CTX_set_mode(ctx,
         SSL_MODE_ENABLE_PARTIAL_WRITE |         // SSL_write may return after a partial send (non-blocking)
@@ -590,7 +670,9 @@ int main(int argc, char** argv) {
 
     while (!shutdown_flag) {
         // 1s timeout so the stale-connection sweep still runs on an idle server.
-        int num_ready = epoll_wait(epoll_fd, events, MAX_EVENTS, 1000);
+        // [FIX 2] don't sleep while some client still has unread data of ours.
+        int timeout_ms = read_pending_fds.empty() ? 1000 : 0;
+        int num_ready = epoll_wait(epoll_fd, events, MAX_EVENTS, timeout_ms);
         if (num_ready == -1) {
             if (errno == EINTR) continue;
             perror("epoll_wait");
@@ -611,9 +693,24 @@ int main(int argc, char** argv) {
             Client& client = it->second;
 
             if (!handle_io(epoll_fd, client, flags)) client.alive = false;
-            if (flags & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) client.alive = false;
+            // [FIX 2] a hung-up peer may still have buffered data we haven't read yet;
+            // finish reading it before we drop the connection.
+            if ((flags & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) && !client.read_pending) client.alive = false;
 
             if (!client.alive) remove_client(epoll_fd, ready_fd);
+        }
+
+        // [FIX 2] second pass: clients that ran out of read budget get another slice.
+        if (!read_pending_fds.empty()) {
+            vector<int> todo;
+            todo.swap(read_pending_fds);
+            for (int fd : todo) {
+                auto it = clients.find(fd);
+                if (it == clients.end() || !it->second.read_pending) continue;
+                Client& client = it->second;
+                if (!handle_io(epoll_fd, client, EPOLLIN)) client.alive = false;
+                if (!client.alive) remove_client(epoll_fd, fd);
+            }
         }
 
         for (int fd : dead_fds) remove_client(epoll_fd, fd);   // remove_client ignores unknown fds
