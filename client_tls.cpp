@@ -32,7 +32,9 @@
 
 using namespace std;
 
-const size_t MAX_MESSAGE_SIZE = 1024;
+const size_t MAX_MESSAGE_SIZE = 1024;                       // largest frame we accept from the server
+constexpr size_t MAX_USERNAME_SIZE = 32;                     // must match the server
+constexpr size_t MAX_CHAT_SIZE = MAX_MESSAGE_SIZE - MAX_USERNAME_SIZE - 2;
 
 // Must match the server's enum exactly.
 enum class MessageType : uint8_t { USERNAME = 0, CHAT = 1 };
@@ -135,7 +137,10 @@ int main(int argc, char** argv) {
     SSL_CTX* ctx = SSL_CTX_new(TLS_client_method());
     if (!ctx) { print_ssl_errors("SSL_CTX_new"); return 1; }
     SSL_CTX_set_min_proto_version(ctx, TLS1_3_VERSION);
-    SSL_CTX_set_options(ctx, SSL_OP_NO_COMPRESSION | SSL_OP_IGNORE_UNEXPECTED_EOF);
+    SSL_CTX_set_options(ctx, SSL_OP_NO_COMPRESSION);
+#ifdef SSL_OP_IGNORE_UNEXPECTED_EOF
+    SSL_CTX_set_options(ctx, SSL_OP_IGNORE_UNEXPECTED_EOF);
+#endif
     SSL_CTX_set_mode(ctx, SSL_MODE_ENABLE_PARTIAL_WRITE | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
     SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, nullptr);
     if (SSL_CTX_load_verify_locations(ctx, ca_file, nullptr) != 1) {
@@ -232,6 +237,13 @@ int main(int argc, char** argv) {
         if ((fds[0].revents & (POLLIN | POLLHUP))) {
             string line;
             if (!getline(cin, line) || line == "quit") break;
+
+            // Check here instead of letting send_message() fail and kill the session.
+            if (line.size() > MAX_CHAT_SIZE) {
+                cout << "Message too long (" << line.size() << " bytes, max " << MAX_CHAT_SIZE
+                     << "). Not sent." << endl;
+                continue;
+            }
 
             if (!send_message(ssl, fd, MessageType::CHAT, line)) {
                 cout << "Send failed." << endl;
