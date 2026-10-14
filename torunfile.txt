@@ -10,3 +10,25 @@ g++ -Wall -Wextra -o client client.cpp
 ./client
 
 ## -pthread option is must to run the server.cpp because without that std:thread wont link 
+
+
+=== TLS version (server_epoll_tls.cpp / client_tls.cpp) ===
+Needs: g++ with C++17, libssl-dev (OpenSSL 1.1.1+; 3.x recommended)
+  sudo apt install g++ libssl-dev
+
+1) Make a private CA + server certificate (once per machine)
+   chmod +x certs/gen_certs.sh && ./certs/gen_certs.sh certs
+
+2) Build
+   g++ -std=c++17 -O2 -Wall -Wextra server_epoll_tls.cpp -o server_tls -lssl -lcrypto
+   g++ -std=c++17 -O2 -Wall -Wextra client_tls.cpp -o client_tls -lssl -lcrypto
+
+3) Run
+   ./server_tls [certs/server.crt] [certs/server.key]
+   ./client_tls [host] [port] [certs/ca.crt]      # host must be localhost or 127.0.0.1 unless you add it to the cert SAN list
+
+Usernames: 1-32 chars of letters, digits, _ - .   Messages: up to 990 bytes.
+
+=== Plain (no TLS) versions ===
+  g++ -Wall -Wextra -pthread -o server server.cpp   # -pthread is required (std::thread)
+  g++ -Wall -Wextra -o client client.cpp
